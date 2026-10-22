@@ -328,6 +328,9 @@ def transcribe_audio(
     language: str = Form(default="ar"),
     include_summary: bool = Form(default=True),
 ):
+    print(f"DEBUG: Running file: {__file__}")
+    print(f"DEBUG: include_summary={include_summary}")
+    print(f"DEBUG: summary_model_loaded={summary_model is not None}")
     if whisper_model is None:
         raise HTTPException(
             status_code=503,
