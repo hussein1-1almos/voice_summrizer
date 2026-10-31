@@ -3,56 +3,117 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Voice Intelligence</title>
+  <meta name="theme-color" content="#f3f1eb">
+  <title>Conversation Notes</title>
   <link rel="stylesheet" href="/web/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><div class="brandmark">VI</div><div><strong>Voice Intelligence</strong><small>IRAQI ARABIC · TRANSCRIPTION & NOTES</small></div></div>
-    <div id="serverState" class="status"><i></i> Checking server</div>
+    <a class="brand" href="/" aria-label="Conversation Notes home">
+      <span class="brand-mark" aria-hidden="true">cn</span>
+      <span class="brand-copy"><strong>Conversation Notes</strong><small>PRIVATE WORKSPACE</small></span>
+    </a>
+    <div class="server-indicator" id="serverState"><i></i><span>Checking server</span></div>
   </header>
-  <main>
-    <section class="intro">
-      <div><p class="eyebrow">YOUR CONVERSATION WORKSPACE</p><h1>Turn conversations into<br><span>clear, useful notes.</span></h1>
-      <p class="muted">Upload recordings, listen through your microphone, or capture audio from a meeting tab.</p></div>
-      <div class="hero-icon">〰</div>
-    </section>
 
-    <nav class="tabs" aria-label="Audio source">
-      <button class="tab active" data-tab="upload">↥ <span>Upload audio</span></button>
-      <button class="tab" data-tab="mic">◉ <span>Live microphone</span></button>
-      <button class="tab" data-tab="meeting">▣ <span>Meeting tab</span></button>
-    </nav>
-
-    <section class="panel tab-panel active" id="panel-upload">
-      <div class="panel-head"><div><h2>Upload a recording</h2><p class="muted">Choose an existing audio file for transcription and summarization.</p></div><span class="pill">FILE MODE</span></div>
-      <label class="dropzone" id="dropzone" for="audioFile"><div class="upload-icon">↑</div><strong>Drop your audio here</strong><span>or browse files · MP3, WAV, M4A, WebM and more</span><input id="audioFile" type="file" accept="audio/*,.m4a,.mp3,.wav,.webm"></label>
-      <div class="file-row" id="fileRow" hidden><span>♫</span><div><strong id="fileName"></strong><small id="fileSize"></small></div><button class="ghost" id="clearFile">Remove</button></div>
-      <div class="actions"><label class="field">Language<select id="uploadLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select></label><button class="primary" id="uploadBtn" disabled>Transcribe & summarize <span>→</span></button></div>
-      <div class="progress-wrap" id="uploadProgress" hidden><div class="progress"><i></i></div><small id="uploadStatus">Uploading and processing…</small></div>
-    </section>
-
-    <section class="panel tab-panel" id="panel-mic">
-      <div class="panel-head"><div><h2>Live microphone</h2><p class="muted">Capture your voice and receive rolling transcript and summary updates.</p></div><span class="pill live-pill">LIVE MODE</span></div>
-      <div class="source-card"><div class="mic-orb" id="micOrb">◉</div><div><strong id="micTitle">Microphone is ready</strong><p class="muted" id="micHint">Allow microphone access when your browser asks.</p></div><div class="timer" id="micTimer">00:00</div></div>
-      <div class="actions"><label class="field">Language<select id="micLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select></label><div class="button-group"><button class="primary" id="micStart">Start listening</button><button class="danger" id="micStop" disabled>Stop & finish</button></div></div>
-    </section>
-
-    <section class="panel tab-panel" id="panel-meeting">
-      <div class="panel-head"><div><h2>Capture a meeting tab</h2><p class="muted">Share the browser tab that contains your Google Meet or browser-based Discord call.</p></div><span class="pill">TAB AUDIO</span></div>
-      <div class="notice"><strong>Before you start</strong><p>Open the meeting in this browser. Select its tab in the sharing dialog and enable <b>Share tab audio</b>. The browser requires your explicit permission. Tell participants that audio is being recorded/transcribed and obtain any required consent.</p></div>
-      <div class="source-card"><div class="meeting-orb">▣</div><div><strong id="meetingTitle">No meeting audio shared</strong><p class="muted" id="meetingHint">This captures shared tab audio, not the meeting video.</p></div><div class="timer" id="meetingTimer">00:00</div></div>
-      <div class="actions"><label class="field">Language<select id="meetingLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select></label><div class="button-group"><button class="primary" id="meetingStart">Choose meeting tab</button><button class="danger" id="meetingStop" disabled>Stop & finish</button></div></div>
-    </section>
-
-    <section class="results">
-      <div class="results-head"><div><p class="eyebrow">SESSION OUTPUT</p><h2>Conversation results</h2></div><div class="result-actions"><span id="sessionState" class="muted">Waiting for audio</span><button class="ghost" id="downloadTxt" disabled>↓ Export TXT</button></div></div>
-      <div class="result-grid">
-        <article class="result-card"><div class="card-head"><h3>Transcript</h3><span id="transcriptCount">0 words</span></div><div class="result-body transcript" id="transcript">Your recognized speech will appear here.</div></article>
-        <article class="result-card"><div class="card-head"><h3>Rolling summary</h3><span class="spark">✦ AI</span></div><div class="result-body" id="summary">The summary will update as speech is processed. A final update is requested when you stop.</div></article>
+  <main class="page">
+    <section class="welcome">
+      <div>
+        <p class="kicker">A clearer record of what was said</p>
+        <h1>Keep the important<br><em>parts of the conversation.</em></h1>
+        <p class="welcome-copy">Bring in a recording or capture a live conversation. Your summary stays front and centre; the full transcript is there when you need to check a detail.</p>
       </div>
-      <p class="footnote">Experimental transcription. Review names, numbers, decisions and action items against the original audio. Do not use as the sole record of a clinical or other high-stakes conversation.</p>
+      <div class="welcome-note"><span class="note-rule"></span><span>Made for thoughtful<br>follow-up, not more noise.</span></div>
     </section>
+
+    <section class="workspace" aria-label="Audio input">
+      <div class="source-heading">
+        <div><p class="kicker">START WITH AUDIO</p><h2>Choose your source</h2></div>
+        <span class="private-label"><span></span> Stays on your network</span>
+      </div>
+
+      <nav class="source-tabs" aria-label="Audio source">
+        <button class="source-tab active" data-tab="upload"><span class="tab-number">01</span><span><b>Upload</b><small>Existing recording</small></span></button>
+        <button class="source-tab" data-tab="mic"><span class="tab-number">02</span><span><b>Microphone</b><small>Record in this page</small></span></button>
+        <button class="source-tab" data-tab="meeting"><span class="tab-number">03</span><span><b>Meeting tab</b><small>Share Meet / Discord audio</small></span></button>
+      </nav>
+
+      <section class="source-panel active" id="panel-upload">
+        <div class="panel-copy"><h3>Bring in a recording</h3><p>Choose an audio file. We’ll transcribe it and prepare a structured set of notes.</p></div>
+        <label class="file-drop" id="dropzone" for="audioFile">
+          <span class="upload-symbol" aria-hidden="true">↑</span>
+          <span class="drop-main"><b id="dropTitle">Drop a recording here, or browse</b><small>MP3, WAV, M4A, WebM and other browser-supported audio</small></span>
+          <input id="audioFile" type="file" accept="audio/*,.m4a,.mp3,.wav,.webm">
+        </label>
+        <div class="selected-file" id="fileRow" hidden><span class="file-symbol">♫</span><span class="file-details"><b id="fileName"></b><small id="fileSize"></small></span><button class="text-button" id="clearFile" type="button">Remove</button></div>
+        <div class="source-controls">
+          <label class="field">Language
+            <select id="uploadLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
+          </label>
+          <button class="button button-dark" id="uploadBtn" disabled>Prepare notes <span>→</span></button>
+        </div>
+        <div class="progress-area" id="uploadProgress" hidden><div class="progress-track"><i></i></div><span id="uploadStatus">Processing recording…</span></div>
+      </section>
+
+      <section class="source-panel" id="panel-mic">
+        <div class="panel-copy"><h3>Record with your microphone</h3><p>Keep this page open while you speak. You can stop whenever you’re ready.</p></div>
+        <div class="record-strip">
+          <div class="record-indicator" id="micOrb"><span></span></div>
+          <div class="record-copy"><b id="micTitle">Microphone is ready</b><small id="micHint">Your browser will ask for microphone permission.</small></div>
+          <time class="record-time" id="micTimer">00:00</time>
+        </div>
+        <div class="source-controls">
+          <label class="field">Language
+            <select id="micLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
+          </label>
+          <div class="button-pair"><button class="button button-dark" id="micStart">Start recording</button><button class="button button-stop" id="micStop" disabled>Stop & prepare notes</button></div>
+        </div>
+      </section>
+
+      <section class="source-panel" id="panel-meeting">
+        <div class="panel-copy"><h3>Capture audio from a meeting</h3><p>This page does not join a meeting for you. Open Google Meet or Discord in another browser tab, join there, then share that tab’s audio here.</p></div>
+        <div class="meeting-steps">
+          <div><span>1</span><p>Join the call in a separate browser tab.</p></div>
+          <div><span>2</span><p>Choose <b>Meeting tab</b> below and select the call tab.</p></div>
+          <div><span>3</span><p>In the browser sharing dialog, turn on <b>Share tab audio</b>.</p></div>
+        </div>
+        <div class="record-strip">
+          <div class="meeting-symbol">↗</div>
+          <div class="record-copy"><b id="meetingTitle">No meeting audio shared</b><small id="meetingHint">Only audio from the tab you explicitly share is captured.</small></div>
+          <time class="record-time" id="meetingTimer">00:00</time>
+        </div>
+        <div class="source-controls">
+          <label class="field">Language
+            <select id="meetingLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
+          </label>
+          <div class="button-pair"><button class="button button-dark" id="meetingStart">Choose meeting tab</button><button class="button button-stop" id="meetingStop" disabled>Stop & prepare notes</button></div>
+        </div>
+        <p class="permission-note">Use Chrome or Edge over the trusted HTTPS address. Select a browser tab, not an entire window, and enable tab audio. Let participants know when recording or transcription is active.</p>
+      </section>
+    </section>
+
+    <section class="notes-section">
+      <div class="notes-heading">
+        <div><p class="kicker">YOUR SESSION</p><h2>Conversation notes</h2></div>
+        <div class="notes-tools"><span id="sessionState" class="session-state">Waiting for audio</span><button class="button button-outline" id="downloadTxt" disabled>Export notes ↓</button></div>
+      </div>
+
+      <article class="summary-paper">
+        <div class="paper-topline"><span class="paper-label">SUMMARY</span><span class="summary-updated" id="summaryUpdated">No summary yet</span></div>
+        <div class="summary-content empty-summary" id="summary">
+          <div class="empty-mark">✳</div>
+          <h3>Your notes will take shape here.</h3>
+          <p>Once audio is processed, the key points, decisions and follow-ups will appear in this space.</p>
+        </div>
+      </article>
+
+      <details class="transcript-details">
+        <summary><span><b>Full transcript</b><small id="transcriptCount">0 words · Expand to review the recognized speech</small></span><span class="details-arrow">＋</span></summary>
+        <div class="transcript-content" id="transcript">The recognized speech will appear here.</div>
+      </details>
+      <p class="review-note">Please review names, dates, numbers and action items against the original audio. Automated transcription and summaries can contain mistakes.</p>
+    </section>
+    <footer><span>Conversation Notes</span><span>Private network workspace · Audio is processed by your server</span></footer>
   </main>
   <script src="/web/app.js"></script>
 </body>
