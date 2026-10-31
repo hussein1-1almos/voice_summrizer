@@ -14,13 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from live_router import build_live_router
 
-app.include_router(
-    build_live_router(
-        whisper_getter=lambda: whisper_model,
-        summarize_fn=summarize_transcript,
-        whisper_lock=whisper_lock,
-    )
-)
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -319,6 +313,13 @@ def summarize_transcript(transcript: str) -> str:
 # ============================================================
 # Transcription endpoint
 # ============================================================
+app.include_router(
+    build_live_router(
+        whisper_getter=lambda: whisper_model,
+        summarize_fn=summarize_transcript,
+        whisper_lock=whisper_lock,
+    )
+)
 app.mount("/web", StaticFiles(directory="web"), name="web")
 
 @app.get("/", include_in_schema=False)
