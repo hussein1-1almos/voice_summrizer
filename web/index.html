@@ -60,6 +60,7 @@
         <div class="record-strip">
           <div class="record-indicator" id="micOrb"><span></span></div>
           <div class="record-copy"><b id="micTitle">Microphone is ready</b><small id="micHint">Microphone access requires HTTPS when you open this page from another device on the network.</small></div>
+          <span class="level-meter" title="Input level"><i id="micLevel"></i></span>
           <time class="record-time" id="micTimer">00:00</time>
         </div>
         <div class="source-controls">
@@ -80,6 +81,7 @@
         <div class="record-strip">
           <div class="meeting-symbol">↗</div>
           <div class="record-copy"><b id="meetingTitle">No meeting audio shared</b><small id="meetingHint">Only audio from the tab you explicitly share is captured.</small></div>
+          <span class="level-meter" title="Input level"><i id="meetingLevel"></i></span>
           <time class="record-time" id="meetingTimer">00:00</time>
         </div>
         <div class="source-controls">
@@ -96,7 +98,7 @@
     <section class="notes-section">
       <div class="notes-heading">
         <div><p class="kicker">YOUR SESSION</p><h2>Conversation notes</h2></div>
-        <div class="notes-tools"><span id="sessionState" class="session-state">Waiting for audio</span><button class="button button-outline" id="downloadTxt" disabled>Export notes ↓</button></div>
+        <div class="notes-tools"><span id="sessionState" class="session-state" data-tone="idle" aria-live="polite">Waiting for audio</span><button class="button button-outline" id="copyMd" disabled>Copy Markdown</button><button class="button button-outline" id="downloadMd" disabled>Download .md ↓</button></div>
       </div>
 
       <article class="summary-paper">
@@ -104,7 +106,7 @@
         <div class="summary-content empty-summary" id="summary" dir="auto">
           <div class="empty-mark">✳</div>
           <h3>Your notes will take shape here.</h3>
-          <p>Once audio is processed, the key points, decisions and follow-ups will appear in this space.</p>
+          <p>Once audio is processed, the key points, decisions and next steps will appear in this space.</p>
         </div>
       </article>
 

@@ -1,5 +1,6 @@
 
 import os
+import re
 import tempfile
 import threading
 from contextlib import asynccontextmanager
@@ -154,16 +155,25 @@ def summarize_chunk(transcript: str) -> str:
     4. انتبه للنفي (ما، مو، لا) ولا تحوّله إلى إثبات.
     5. انسب المهام والأفعال إلى "المتحدث" ما لم يُذكر اسم آخر.
     6. احذف أي قسم لا توجد له معلومات.
+    7. أخرج الناتج بصيغة Markdown فقط، بدون أي مقدمة أو خاتمة وبدون ``` حول الناتج.
 
-    الصيغة:
-    العنوان: ...
-    الملخص: (جملتان إلى ثلاث)
-    المستجدات:
+    الصيغة (Markdown):
+    # عنوان قصير للمحادثة
+
+    ## الملخص
+    جملتان إلى ثلاث.
+
+    ## المستجدات
     - ...
-    العوائق:
+
+    ## القرارات
     - ...
-    الخطوات القادمة:
-    - المهمة (المسؤول، الموعد إن ذُكر)
+
+    ## العوائق
+    - ...
+
+    ## الخطوات القادمة
+    - [ ] المهمة — **المسؤول**، الموعد إن ذُكر
     """
 
     user_prompt = (
@@ -225,6 +235,61 @@ def summarize_chunk(transcript: str) -> str:
     return result
 
 
+SUMMARY_SECTION_NAMES = (
+    "العنوان", "الملخص", "المستجدات", "القرارات", "العوائق",
+    "الخطوات القادمة", "الخطوات التالية", "المهام",
+)
+ACTION_SECTION_NAMES = ("الخطوات القادمة", "الخطوات التالية", "المهام")
+
+
+def normalize_summary_markdown(text: str) -> str:
+    """
+    Make the model output consistent Markdown, even when it falls back
+    to the older "Label: value" style or wraps the answer in a code fence.
+    Bullets under the next-steps section become "- [ ]" task items.
+    """
+    text = text.strip()
+    fence = re.fullmatch(r"```[a-zA-Z]*\s*\n(.*?)\n?```", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
+
+    lines = []
+    in_actions = False
+    for raw in text.replace("\r", "").split("\n"):
+        line = raw.strip()
+        heading = None
+
+        md_heading = re.match(r"^(#{1,4})\s+(.+?)\s*:?\s*$", line)
+        bold_heading = re.match(r"^\*\*(.+?)\*\*\s*:?\s*(.*)$", line)
+        label = re.match(r"^(" + "|".join(SUMMARY_SECTION_NAMES) + r")\s*:\s*(.*)$", line)
+
+        if md_heading:
+            heading, rest = md_heading.group(2), ""
+            level = len(md_heading.group(1))
+        elif label or (bold_heading and bold_heading.group(1).rstrip(":") in SUMMARY_SECTION_NAMES):
+            match = label or bold_heading
+            heading, rest = match.group(1).rstrip(":"), match.group(2).strip()
+            level = 2
+            if heading == "العنوان":
+                # "العنوان: X" becomes the document title "# X".
+                heading, rest, level = (rest or heading), "", 1
+
+        if heading is not None:
+            in_actions = any(name in heading for name in ACTION_SECTION_NAMES)
+            lines.append(f"{'#' * level} {heading}")
+            if rest:
+                lines.append(rest)
+            continue
+
+        if in_actions:
+            bullet = re.match(r"^(?:[-*•]|\d+[.)])\s+(?!\[[ xX]\])(.+)$", line)
+            if bullet:
+                line = f"- [ ] {bullet.group(1)}"
+        lines.append(line)
+
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def split_transcript(transcript: str) -> list[str]:
     """
     Split long transcripts by tokenizer tokens, rather than
@@ -266,7 +331,7 @@ def summarize_transcript(transcript: str) -> str:
         return "ماكو نص كافي حتى ينلخّص."
 
     if len(chunks) == 1:
-        return summarize_chunk(chunks[0])
+        return normalize_summary_markdown(summarize_chunk(chunks[0]))
 
     print(f"Summarizing {len(chunks)} transcript chunks...")
 
@@ -307,7 +372,7 @@ def summarize_transcript(transcript: str) -> str:
             break
         partial_summaries = shortened
 
-    return summarize_chunk(combined)
+    return normalize_summary_markdown(summarize_chunk(combined))
 
 
 # ============================================================
