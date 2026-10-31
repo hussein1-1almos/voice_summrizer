@@ -84,42 +84,57 @@ def build_live_router(
         received_bytes = 0
         last_level_report = 0.0
 
-        async def send_summary(final: bool = False):
-            nonlocal last_summary_at
-            transcript = "\n".join(session_transcript).strip()
-            if not transcript:
-                return
-            if not final and processed_seconds - last_summary_at < summary_interval_seconds:
-                return
+        # The receive loop must never wait for Whisper or the summary model:
+        # if it does, stop/ping/disconnect frames are not read while inference
+        # runs and the connection drops once Whisper is slower than real time.
+        # Audio chunks are queued for a worker task; summaries run as their
+        # own background task, one at a time.
+        chunks: asyncio.Queue = asyncio.Queue()
+        queued_seconds = 0.0
+        summary_task: asyncio.Task | None = None
+        worker_task: asyncio.Task | None = None
+        send_lock = asyncio.Lock()
 
-            await websocket.send_json({
+        async def send(payload: dict):
+            async with send_lock:
+                await websocket.send_json(payload)
+
+        async def run_summary(transcript: str):
+            await send({
                 "type": "status",
                 "message": "Updating rolling summary...",
             })
+            started = time.perf_counter()
             try:
                 # summarize_transcript already uses the application's summary_lock.
                 summary = await asyncio.to_thread(summarize_fn, transcript)
+                print(f"[live {client}] Summary updated in {time.perf_counter() - started:.1f}s")
                 if summary:
-                    await websocket.send_json({
+                    await send({
                         "type": "summary",
                         "summary": summary,
                     })
-                last_summary_at = processed_seconds
             except Exception as exc:
-                await websocket.send_json({
+                print(f"[live {client}] Summary failed: {type(exc).__name__}: {exc}")
+                await send({
                     "type": "error",
                     "message": f"Summary: {type(exc).__name__}: {exc}",
                 })
 
-        async def transcribe_buffer():
-            nonlocal pcm_parts, buffered_samples, processed_seconds
-            if not pcm_parts:
+        def maybe_start_summary():
+            nonlocal summary_task, last_summary_at
+            if summary_task is not None and not summary_task.done():
                 return
+            if processed_seconds - last_summary_at < summary_interval_seconds:
+                return
+            transcript = "\n".join(session_transcript).strip()
+            if not transcript:
+                return
+            last_summary_at = processed_seconds
+            summary_task = asyncio.create_task(run_summary(transcript))
 
-            joined = np.concatenate(pcm_parts)
-            pcm_parts = []
-            buffered_samples = 0
-
+        async def transcribe_chunk(joined: np.ndarray):
+            nonlocal processed_seconds
             audio = _resample_pcm16(joined, sample_rate, 16000)
             if audio.size < 1600:
                 return
@@ -127,7 +142,8 @@ def build_live_router(
             seconds = audio.size / 16000.0
             processed_seconds += seconds
             rms = float(np.sqrt(np.mean(audio ** 2)))
-            print(f"[live {client}] Transcribing {seconds:.1f}s chunk (rms={rms:.4f})...")
+            print(f"[live {client}] Transcribing {seconds:.1f}s chunk (rms={rms:.4f}, "
+                  f"{queued_seconds:.0f}s more queued)...")
             started = time.perf_counter()
 
             def run_whisper():
@@ -155,7 +171,7 @@ def build_live_router(
             try:
                 texts = await asyncio.to_thread(run_whisper)
             except Exception as exc:
-                await websocket.send_json({
+                await send({
                     "type": "error",
                     "message": f"Whisper: {type(exc).__name__}: {exc}",
                 })
@@ -163,30 +179,51 @@ def build_live_router(
 
             text = " ".join(texts).strip()
             elapsed = time.perf_counter() - started
+            if elapsed > seconds:
+                print(f"[live {client}] WARNING: Whisper is slower than real time "
+                      f"({elapsed:.1f}s for {seconds:.1f}s of audio); transcripts will lag.")
             if text:
                 print(f"[live {client}] Whisper {elapsed:.1f}s -> {text!r}")
-            else:
-                print(f"[live {client}] Whisper {elapsed:.1f}s -> no speech detected")
-                await websocket.send_json({
-                    "type": "status",
-                    "message": f"No speech in the last {seconds:.0f}s"
-                    + (" (audio is silent)" if rms < 0.001 else ""),
-                })
-            if text:
                 session_transcript.append(text)
-                await websocket.send_json({
+                await send({
                     "type": "transcript",
                     "text": text,
                     "source": source,
                 })
+            else:
+                print(f"[live {client}] Whisper {elapsed:.1f}s -> no speech detected")
+                await send({
+                    "type": "status",
+                    "message": f"No speech in the last {seconds:.0f}s"
+                    + (" (audio is silent)" if rms < 0.001 else ""),
+                })
 
-            await send_summary(final=False)
+            maybe_start_summary()
+
+        async def transcription_worker():
+            nonlocal queued_seconds
+            while True:
+                joined = await chunks.get()
+                if joined is None:
+                    return
+                queued_seconds -= joined.size / sample_rate
+                await transcribe_chunk(joined)
+
+        def flush_buffer():
+            nonlocal pcm_parts, buffered_samples, queued_seconds
+            if not pcm_parts:
+                return
+            joined = np.concatenate(pcm_parts)
+            pcm_parts = []
+            buffered_samples = 0
+            queued_seconds += joined.size / sample_rate
+            chunks.put_nowait(joined)
 
         try:
             first = await websocket.receive_text()
             config = json.loads(first)
             if config.get("type") != "start":
-                await websocket.send_json({
+                await send({
                     "type": "error",
                     "message": "Send start configuration first.",
                 })
@@ -203,7 +240,8 @@ def build_live_router(
 
             source = config.get("source", "microphone")
             print(f"[live {client}] Start: source={source} language={language} sample_rate={sample_rate}")
-            await websocket.send_json({
+            worker_task = asyncio.create_task(transcription_worker())
+            await send({
                 "type": "status",
                 "message": "Live audio connected.",
             })
@@ -211,8 +249,10 @@ def build_live_router(
             while True:
                 message = await websocket.receive()
                 if message.get("type") == "websocket.disconnect":
-                    print(f"[live {client}] Client disconnected")
+                    print(f"[live {client}] Client disconnected (code={message.get('code')})")
                     break
+                if worker_task.done() and worker_task.exception():
+                    raise worker_task.exception()
 
                 if message.get("bytes") is not None:
                     raw = message["bytes"]
@@ -230,41 +270,59 @@ def build_live_router(
                             peak = int(np.abs(chunk.astype(np.int32)).max())
                             buffered = buffered_samples / sample_rate
                             print(f"[live {client}] Received {received_bytes / 1024:.0f} KB, "
-                                  f"buffered {buffered:.1f}s, peak={peak}")
-                            await websocket.send_json({
-                                "type": "status",
-                                "message": (f"Receiving audio · {buffered:.0f}/{chunk_seconds}s buffered"
-                                            + (" · SILENT input" if peak < 30 else "")),
-                            })
+                                  f"buffered {buffered:.1f}s, waiting for Whisper {queued_seconds:.0f}s, "
+                                  f"peak={peak}")
+                            status = f"Receiving audio · {buffered:.0f}/{chunk_seconds}s buffered"
+                            if queued_seconds >= chunk_seconds:
+                                status += f" · transcription {queued_seconds:.0f}s behind"
+                            if peak < 30:
+                                status += " · SILENT input"
+                            await send({"type": "status", "message": status})
 
                     if buffered_samples >= sample_rate * chunk_seconds:
-                        await transcribe_buffer()
+                        flush_buffer()
 
                 elif message.get("text") is not None:
                     control = json.loads(message["text"])
                     if control.get("type") == "stop":
-                        await transcribe_buffer()
-                        await send_summary(final=True)
+                        remaining = queued_seconds + buffered_samples / sample_rate
+                        print(f"[live {client}] Stop requested; finishing {remaining:.0f}s of queued audio")
+                        await send({
+                            "type": "status",
+                            "message": f"Finishing the last {remaining:.0f}s of audio...",
+                        })
+                        flush_buffer()
+                        chunks.put_nowait(None)
+                        await worker_task
+                        if summary_task is not None:
+                            await summary_task
                         final_text = "\n".join(session_transcript).strip()
-                        await websocket.send_json({
+                        if final_text:
+                            await run_summary(final_text)
+                        await send({
                             "type": "finished",
                             "transcript": final_text,
                         })
+                        print(f"[live {client}] Session finished")
                         stopped = True
                         break
 
-        except WebSocketDisconnect:
-            print(f"[live {client}] Client disconnected")
+        except WebSocketDisconnect as exc:
+            print(f"[live {client}] Client disconnected (code={exc.code})")
         except Exception as exc:
             print(f"[live {client}] Error: {type(exc).__name__}: {exc}")
             try:
-                await websocket.send_json({
+                await send({
                     "type": "error",
                     "message": f"{type(exc).__name__}: {exc}",
                 })
             except Exception:
                 pass
         finally:
+            # Running to_thread calls finish in the background; their results are dropped.
+            for task in (worker_task, summary_task):
+                if task is not None and not task.done():
+                    task.cancel()
             if not stopped:
                 try:
                     await websocket.close()
