@@ -46,3 +46,4 @@
 .summary-content strong{font-weight:800;color:#222a20}
 .summary-content blockquote[dir="rtl"]{border-left:0;border-right:3px solid #9aa58d}
 .permission-note{max-width:760px}
+.check-field{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:11px;padding-bottom:10px;cursor:pointer}

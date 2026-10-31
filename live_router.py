@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Callable
 
 import numpy as np
@@ -58,6 +59,8 @@ def build_live_router(
     @router.websocket("/ws/live")
     async def live_audio(websocket: WebSocket):
         await websocket.accept()
+        client = f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "?"
+        print(f"[live {client}] WebSocket connected")
         model = whisper_getter()
         if model is None:
             await websocket.send_json({
@@ -78,6 +81,8 @@ def build_live_router(
         chunk_seconds = 15
         summary_interval_seconds = 60
         stopped = False
+        received_bytes = 0
+        last_level_report = 0.0
 
         async def send_summary(final: bool = False):
             nonlocal last_summary_at
@@ -119,7 +124,11 @@ def build_live_router(
             if audio.size < 1600:
                 return
 
-            processed_seconds += audio.size / 16000.0
+            seconds = audio.size / 16000.0
+            processed_seconds += seconds
+            rms = float(np.sqrt(np.mean(audio ** 2)))
+            print(f"[live {client}] Transcribing {seconds:.1f}s chunk (rms={rms:.4f})...")
+            started = time.perf_counter()
 
             def run_whisper():
                 def consume():
@@ -153,6 +162,16 @@ def build_live_router(
                 return
 
             text = " ".join(texts).strip()
+            elapsed = time.perf_counter() - started
+            if text:
+                print(f"[live {client}] Whisper {elapsed:.1f}s -> {text!r}")
+            else:
+                print(f"[live {client}] Whisper {elapsed:.1f}s -> no speech detected")
+                await websocket.send_json({
+                    "type": "status",
+                    "message": f"No speech in the last {seconds:.0f}s"
+                    + (" (audio is silent)" if rms < 0.001 else ""),
+                })
             if text:
                 session_transcript.append(text)
                 await websocket.send_json({
@@ -183,6 +202,7 @@ def build_live_router(
                 language = "ar"
 
             source = config.get("source", "microphone")
+            print(f"[live {client}] Start: source={source} language={language} sample_rate={sample_rate}")
             await websocket.send_json({
                 "type": "status",
                 "message": "Live audio connected.",
@@ -190,6 +210,9 @@ def build_live_router(
 
             while True:
                 message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    print(f"[live {client}] Client disconnected")
+                    break
 
                 if message.get("bytes") is not None:
                     raw = message["bytes"]
@@ -200,6 +223,19 @@ def build_live_router(
                     if chunk.size:
                         pcm_parts.append(chunk)
                         buffered_samples += len(chunk)
+                        received_bytes += len(raw)
+                        now = time.monotonic()
+                        if now - last_level_report >= 5:
+                            last_level_report = now
+                            peak = int(np.abs(chunk.astype(np.int32)).max())
+                            buffered = buffered_samples / sample_rate
+                            print(f"[live {client}] Received {received_bytes / 1024:.0f} KB, "
+                                  f"buffered {buffered:.1f}s, peak={peak}")
+                            await websocket.send_json({
+                                "type": "status",
+                                "message": (f"Receiving audio · {buffered:.0f}/{chunk_seconds}s buffered"
+                                            + (" · SILENT input" if peak < 30 else "")),
+                            })
 
                     if buffered_samples >= sample_rate * chunk_seconds:
                         await transcribe_buffer()
@@ -218,8 +254,9 @@ def build_live_router(
                         break
 
         except WebSocketDisconnect:
-            pass
+            print(f"[live {client}] Client disconnected")
         except Exception as exc:
+            print(f"[live {client}] Error: {type(exc).__name__}: {exc}")
             try:
                 await websocket.send_json({
                     "type": "error",
