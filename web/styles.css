@@ -22,3 +22,27 @@
 .transcript-details{margin-top:12px;background:rgba(255,254,250,.55);border:1px solid var(--line)}.transcript-details summary{display:flex;justify-content:space-between;align-items:center;list-style:none;cursor:pointer;padding:15px 18px}.transcript-details summary::-webkit-details-marker{display:none}.transcript-details summary b,.transcript-details summary small{display:block}.transcript-details summary b{font:500 16px "Newsreader",Georgia,serif}.transcript-details summary small{font-size:10px;color:var(--muted);margin-top:4px}.details-arrow{font-size:17px;color:var(--olive)}.transcript-details[open] .details-arrow{transform:rotate(45deg)}.transcript-content{padding:0 18px 18px;color:#686d62;font-size:11px;line-height:1.8;white-space:pre-wrap;max-height:330px;overflow:auto}
 .review-note{font-size:10px;color:#8b8d82;line-height:1.6;margin:13px 0 0}footer{display:flex;justify-content:space-between;gap:20px;padding-top:26px;margin-top:35px;border-top:1px solid var(--line);color:#929489;font-size:9px}
 @media(max-width:720px){.topbar{padding:0 17px}.page{padding:35px 16px 28px}.welcome{align-items:flex-start;margin-bottom:30px}.welcome-note{display:none}.welcome h1{font-size:40px}.workspace{padding:19px 16px}.source-heading{align-items:flex-start;gap:10px}.private-label{font-size:9px}.source-tab{gap:7px;padding:12px 5px}.source-tab small{font-size:9px}.tab-number{font-size:11px}.source-controls,.notes-heading{align-items:stretch;flex-direction:column}.source-controls .button,.button-pair{width:100%}.button-pair>*{flex:1}.meeting-steps{grid-template-columns:1fr}.notes-tools{justify-content:space-between}.summary-paper{padding:17px 17px 22px}.summary-content{margin-top:18px}.summary-updated{font-size:8px}footer{flex-direction:column;gap:7px}}
+
+/* Reading layout: Arabic and English are directed independently per block. */
+.summary-content{max-width:900px;font-size:15px;line-height:1.95;overflow-wrap:anywhere}
+.summary-section{padding:0 0 18px;margin:0 0 20px;border-bottom:1px solid #e8e6dd}
+.summary-section:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
+.summary-section>h1,.summary-section>h2,.summary-section>h3,.summary-section>h4{font-family:"Newsreader","Noto Sans Arabic","Noto Naskh Arabic",Georgia,serif;font-weight:700;letter-spacing:-.2px;margin-top:0;padding:0 0 10px;border-bottom:2px solid #e7e8df;color:#293126}
+.summary-section>h1{font-size:30px}.summary-section>h2{font-size:24px}.summary-section>h3{font-size:20px}.summary-section>h4{font-size:17px}
+.summary-content [dir="rtl"]{direction:rtl;text-align:right;font-family:"Noto Sans Arabic","Noto Naskh Arabic",Tahoma,Arial,sans-serif;unicode-bidi:plaintext;line-height:2}
+.summary-content [dir="ltr"]{direction:ltr;text-align:left;unicode-bidi:plaintext}
+.summary-content p{margin:12px 0 15px}
+.summary-content .summary-list{margin:12px 0 18px;padding-inline-start:28px;padding-left:revert}
+.summary-content [dir="rtl"].summary-list{padding-inline-start:28px;padding-right:28px;padding-left:0}
+.summary-content li{margin:9px 0;padding-inline-start:4px}
+.summary-content .action-section{background:#f8f8f3;border:1px solid #e2e4d9;border-radius:7px;padding:17px 20px 19px;margin-top:22px}
+.summary-content .action-section>h1,.summary-content .action-section>h2,.summary-content .action-section>h3,.summary-content .action-section>h4{border-bottom-color:#d8ddce}
+.summary-content .task-item{list-style:none;margin:12px 0;padding:0}
+.summary-content .task-item label{display:flex;align-items:flex-start;gap:11px;cursor:pointer}
+.summary-content .task-item[dir="rtl"] label{flex-direction:row-reverse;justify-content:flex-end}
+.summary-content .task-item input{width:17px;height:17px;flex:0 0 17px;margin:5px 0 0;accent-color:var(--olive);cursor:pointer}
+.summary-content .task-item input:checked+span{text-decoration:line-through;color:#888d81}
+.summary-content .task-item span{flex:1}
+.summary-content strong{font-weight:800;color:#222a20}
+.summary-content blockquote[dir="rtl"]{border-left:0;border-right:3px solid #9aa58d}
+.permission-note{max-width:760px}

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="auto">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -59,7 +59,7 @@
         <div class="panel-copy"><h3>Record with your microphone</h3><p>Keep this page open while you speak. You can stop whenever you’re ready.</p></div>
         <div class="record-strip">
           <div class="record-indicator" id="micOrb"><span></span></div>
-          <div class="record-copy"><b id="micTitle">Microphone is ready</b><small id="micHint">Your browser will ask for microphone permission.</small></div>
+          <div class="record-copy"><b id="micTitle">Microphone is ready</b><small id="micHint">Microphone access requires HTTPS when you open this page from another device on the network.</small></div>
           <time class="record-time" id="micTimer">00:00</time>
         </div>
         <div class="source-controls">
@@ -88,7 +88,7 @@
           </label>
           <div class="button-pair"><button class="button button-dark" id="meetingStart">Choose meeting tab</button><button class="button button-stop" id="meetingStop" disabled>Stop & prepare notes</button></div>
         </div>
-        <p class="permission-note">Use Chrome or Edge over the trusted HTTPS address. Select a browser tab, not an entire window, and enable tab audio. Let participants know when recording or transcription is active.</p>
+        <p class="permission-note">Open this page over trusted HTTPS (plain HTTP on a LAN IP blocks capture). Use current Chrome or Edge, choose the Google Meet browser tab, and enable “Share tab audio”. This page captures audio only; it does not join the meeting. Let participants know when recording or transcription is active.</p>
       </section>
     </section>
 
@@ -100,7 +100,7 @@
 
       <article class="summary-paper">
         <div class="paper-topline"><span class="paper-label">SUMMARY</span><span class="summary-updated" id="summaryUpdated">No summary yet</span></div>
-        <div class="summary-content empty-summary" id="summary">
+        <div class="summary-content empty-summary" id="summary" dir="auto">
           <div class="empty-mark">✳</div>
           <h3>Your notes will take shape here.</h3>
           <p>Once audio is processed, the key points, decisions and follow-ups will appear in this space.</p>
@@ -109,7 +109,7 @@
 
       <details class="transcript-details">
         <summary><span><b>Full transcript</b><small id="transcriptCount">0 words · Expand to review the recognized speech</small></span><span class="details-arrow">＋</span></summary>
-        <div class="transcript-content" id="transcript">The recognized speech will appear here.</div>
+        <div class="transcript-content" id="transcript" dir="auto">The recognized speech will appear here.</div>
       </details>
       <p class="review-note">Please review names, dates, numbers and action items against the original audio. Automated transcription and summaries can contain mistakes.</p>
     </section>
