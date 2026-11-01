@@ -23,10 +23,48 @@ async function checkServer() {
 checkServer();
 setInterval(checkServer, 30000);
 
+// ---------------------------------------------------------------- layout: capture sheet, sidebar, export menu
+
+// The app bar tabs open the capture sheet under it; clicking the open tab again closes it.
+function showCapture(tab) {
+  const open = !!tab;
+  $("captureSheet").hidden = !open;
+  document.querySelectorAll(".source-tab").forEach(x => {
+    const on = x.dataset.tab === tab;
+    x.classList.toggle("active", on);
+    x.setAttribute("aria-expanded", String(on));
+  });
+  document.querySelectorAll(".source-panel").forEach(x => x.classList.toggle("active", x.id === "panel-" + tab));
+}
 document.querySelectorAll(".source-tab").forEach(b => b.addEventListener("click", () => {
-  document.querySelectorAll(".source-tab").forEach(x => x.classList.toggle("active", x === b));
-  document.querySelectorAll(".source-panel").forEach(x => x.classList.toggle("active", x.id === "panel-" + b.dataset.tab));
+  showCapture(b.classList.contains("active") ? null : b.dataset.tab);
 }));
+function markLiveTab(mode) {
+  const tab = { microphone: "mic", "meeting-tab": "meeting" }[mode];
+  document.querySelectorAll(".source-tab").forEach(x => x.classList.toggle("live", x.dataset.tab === tab));
+}
+
+function setSidebar(open) { document.body.classList.toggle("sidebar-open", open); }
+$("menuBtn").onclick = () => setSidebar(!document.body.classList.contains("sidebar-open"));
+$("sidebarScrim").onclick = () => setSidebar(false);
+
+function setExportMenu(open) {
+  $("exportPop").hidden = !open;
+  $("exportBtn").setAttribute("aria-expanded", String(open));
+}
+$("exportBtn").onclick = e => { e.stopPropagation(); setExportMenu($("exportPop").hidden); };
+$("exportPop").addEventListener("click", () => setExportMenu(false));
+document.addEventListener("click", e => { if (!e.target.closest(".export-menu")) setExportMenu(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { setExportMenu(false); setSidebar(false); } });
+
+$("newNote").onclick = () => {
+  setSidebar(false);
+  if (state.busy) { setState("Finish the current session before starting a new note", "error"); return; }
+  resetResults();
+  setState("Waiting for audio", "idle");
+  showCapture("upload");
+};
+$("noteSearch").addEventListener("input", () => renderLibrary());
 
 function setState(message, tone) {
   if (!tone) tone = /issue|fail|unavailable|closed|error/i.test(message) ? "error"
@@ -186,7 +224,7 @@ function renderSummary(raw) {
   if (!v) {
     state.blocks = [];
     $("summary").className = "summary-content empty-summary";
-    $("summary").innerHTML = '<div class="empty-mark">✳</div><h3>Your notes will take shape here.</h3><p>Once audio is processed, the key points, decisions and next steps will appear in this space.</p>';
+    $("summary").innerHTML = '<div class="empty-mark">✳</div><h3>Add audio to start this note</h3><p>Upload a recording, record with your microphone or capture a meeting from the bar above. The summary, decisions and next steps appear here.</p>';
     $("summaryUpdated").textContent = "No summary yet";
     return;
   }
@@ -215,7 +253,7 @@ $("summary").addEventListener("change", e => {
 function refreshExportButtons() {
   const empty = !state.transcript.trim() && !state.summary.trim();
   $("downloadMd").disabled = empty;
-  $("downloadHtml").disabled = empty;
+  $("downloadHtml").disabled = !state.summary.trim();
   $("copyMd").disabled = empty;
 }
 function updateTranscript(t) {
@@ -225,7 +263,7 @@ function updateTranscript(t) {
   box.textContent = state.transcript || "No speech recognized yet.";
   if (atBottom) box.scrollTop = box.scrollHeight;
   const count = state.transcript.trim() ? state.transcript.trim().split(/\s+/).length : 0;
-  $("transcriptCount").textContent = `${count} words · Expand to review the recognized speech`;
+  $("transcriptCount").textContent = count ? `${count} words` : "Nothing recognized yet";
   refreshExportButtons();
 }
 function updateSummary(t) { state.summary = t || ""; renderSummary(state.summary); refreshExportButtons(); }
@@ -279,10 +317,8 @@ blockquote{margin:12px 0;padding:9px 15px;border-inline-start:3px solid #9aa58d;
 .task-list{list-style:none;padding:0}.task-item{margin:0;padding:8px 6px}.task-item+.task-item{border-top:1px solid #ebebe3}
 .task-item label{display:flex;align-items:flex-start;gap:11px}.task-item input{width:17px;height:17px;flex:none;margin:6px 0 0;accent-color:var(--olive)}
 .task-item input:checked+span{text-decoration:line-through;color:#888d81}
-details{margin-top:14px;background:#fffefa;border:1px solid var(--line);border-radius:6px}summary{cursor:pointer;padding:14px 18px;font:500 17px "Newsreader",Georgia,serif}
-.transcript{padding:0 18px 18px;color:#555a50;font-size:14px;white-space:pre-wrap}
 .note{font-size:12px;color:var(--muted);margin-top:16px}
-@media print{body{background:#fff}.paper{border:0;box-shadow:none;padding:0}details{border:0}details>*{display:block}}
+@media print{body{background:#fff}.paper{border:0;box-shadow:none;padding:0}}
 @media(max-width:600px){.paper{padding:20px 18px}}`;
 
 function notesHtml() {
@@ -291,8 +327,7 @@ function notesHtml() {
   const titleBlock = hasTitle ? "" : `<header class="summary-title"><h1${dirAttr(title)}>${inlineMd(title)}</h1></header>`;
   const summary = state.blocks.length ? renderBlocks(state.blocks) : "<p>No summary available.</p>";
   const rtl = hasArabic(title + state.summary.slice(0, 400));
-  const transcript = state.transcript.trim()
-    ? `<details><summary>Full transcript</summary><div class="transcript"${dirAttr(state.transcript)}>${esc(state.transcript)}</div></details>` : "";
+  // Summary only: the raw transcript is not part of the shared page.
   return `<!doctype html>
 <html lang="${rtl ? "ar" : "en"}" dir="${rtl ? "rtl" : "ltr"}">
 <head>
@@ -306,7 +341,6 @@ function notesHtml() {
 <main class="page">
 <p class="meta" dir="ltr">CONVERSATION NOTES · ${esc(new Date().toLocaleDateString([], { dateStyle: "long" }))}</p>
 <article class="paper">${titleBlock}${summary}</article>
-${transcript}
 <p class="note" dir="ltr">Generated automatically from a recording. Names, dates and numbers may contain recognition errors.</p>
 </main>
 </body>
@@ -342,7 +376,7 @@ let authMode = "login";
 function setAuthMode(mode) {
   authMode = mode;
   const login = mode === "login";
-  $("authKicker").textContent = login ? "WELCOME BACK" : "NEW ACCOUNT";
+  $("authKicker").textContent = login ? "Welcome back" : "New account";
   $("authTitle").textContent = login ? "Sign in to your notes" : "Create your account";
   $("authCopy").textContent = login
     ? "Your recordings, transcripts and summaries are saved to your account on this server."
@@ -386,7 +420,12 @@ function showApp(user) {
   $("accountBox").hidden = false;
   $("authView").hidden = true;
   $("appView").hidden = false;
+  // Reopen the note named in the address (#note=12) after a reload. Read it
+  // before setNoteTitle below rewrites the address.
+  const linked = Number((location.hash.match(/^#note=(\d+)$/) || [])[1]);
+  if (!state.noteId) { updateTranscript(""); updateSummary(""); setNoteTitle(""); }
   refreshNotes();
+  if (linked && !state.noteId) openNote(linked);
 }
 $("logoutBtn").onclick = async () => {
   if (state.activeMode) {
@@ -409,8 +448,10 @@ function formatDate(ts) { return new Date(ts * 1000).toLocaleString([], { dateSt
 
 function setNoteTitle(title) {
   state.noteTitle = title || "";
-  $("noteTitle").textContent = title || "Conversation notes";
-  $("noteTitle").dir = "auto";
+  history.replaceState(null, "", state.noteId ? `#note=${state.noteId}` : location.pathname);
+  $("noteTitle").textContent = title || "New note";
+  // The whole header (title, saved time, Rename) follows the title's language.
+  $("noteTitle").closest(".note-head").dir = hasArabic(title) ? "rtl" : "ltr";
   $("renameNote").hidden = !state.noteId;
 }
 
@@ -419,7 +460,7 @@ async function refreshNotes() {
   try {
     state.notes = await api("/api/notes");
   } catch {
-    $("libraryCount").textContent = "Could not load notes";
+    $("libraryList").innerHTML = '<p class="library-empty">Could not load your notes. Check the server connection and reload.</p>';
     return;
   }
   const current = state.notes.find(n => n.id === state.noteId);
@@ -439,21 +480,45 @@ async function refreshNotes() {
   if (state.notes.some(n => n.status === "processing" || n.status === "live")) state.notesPoll = setTimeout(refreshNotes, 5000);
 }
 
+// Sidebar groups: notes are listed newest first, so each group is one contiguous run.
+function dateGroup(ts) {
+  const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(new Date()) - day(new Date(ts * 1000))) / 86400000);
+  return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "Previous 7 days" : "Earlier";
+}
+function listTime(ts) {
+  const d = new Date(ts * 1000);
+  return dateGroup(ts) === "Today" || dateGroup(ts) === "Yesterday"
+    ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
 function renderLibrary() {
-  $("libraryCount").textContent = state.notes.length ? `${state.notes.length} saved` : "No notes yet";
   if (!state.notes.length) {
-    $("libraryList").innerHTML = '<p class="library-empty">Upload a recording or start a live session — every result is saved here automatically.</p>';
+    $("libraryList").innerHTML = '<p class="library-empty">No notes yet. Upload a recording or start recording, and the result is saved here.</p>';
     return;
   }
-  $("libraryList").innerHTML = state.notes.map(n => `
-    <article class="library-item${n.id === state.noteId ? " active" : ""}">
-      <button class="library-open" type="button" data-open="${n.id}">
-        <span class="library-meta">${esc(SOURCE_LABELS[n.source] || n.source)} · ${esc(formatDate(n.updated_at))}${STATUS_LABELS[n.status] ? ` <em class="note-status" data-status="${esc(n.status)}">${STATUS_LABELS[n.status]}</em>` : ""}</span>
+  const query = $("noteSearch").value.trim().toLowerCase();
+  const notes = query ? state.notes.filter(n => (n.title + " " + (n.preview || "")).toLowerCase().includes(query)) : state.notes;
+  if (!notes.length) {
+    $("libraryList").innerHTML = `<p class="library-empty">No notes match “${esc(query)}”.</p>`;
+    return;
+  }
+  let group = null;
+  $("libraryList").innerHTML = notes.map(n => {
+    const g = dateGroup(n.updated_at);
+    const header = g !== group ? `<div class="library-group">${g}</div>` : "";
+    group = g;
+    const status = STATUS_LABELS[n.status] ? `<em class="note-status" data-status="${esc(n.status)}">${STATUS_LABELS[n.status]}</em>` : "";
+    return `${header}
+    <div class="library-item${n.id === state.noteId ? " active" : ""}">
+      <button class="library-open" type="button" data-open="${n.id}" title="${esc(n.title)}">
         <b${dirAttr(n.title)}>${esc(n.title)}</b>
-        ${n.preview ? `<small${dirAttr(n.preview)}>${esc(n.preview)}</small>` : ""}
+        <span class="library-meta"><span>${esc(SOURCE_LABELS[n.source] || n.source)}</span><time>${esc(listTime(n.updated_at))}</time>${status}</span>
       </button>
-      <button class="text-button library-delete" type="button" data-delete="${n.id}">Delete</button>
-    </article>`).join("");
+      <button class="library-delete" type="button" data-delete="${n.id}" aria-label="Delete ${esc(n.title)}" title="Delete">×</button>
+    </div>`;
+  }).join("");
 }
 
 $("libraryList").addEventListener("click", async e => {
@@ -497,7 +562,8 @@ async function openNote(id, { scroll = true } = {}) {
     }
     if (note.error) $("summary").insertAdjacentHTML("beforeend", `<p class="summary-warning">${esc(note.error)}</p>`);
     renderLibrary();
-    if (scroll) document.querySelector(".notes-section").scrollIntoView({ behavior: "smooth" });
+    setSidebar(false);
+    if (scroll) $("noteView").scrollTop = 0;
   } catch (e) {
     setState("Could not open note: " + e.message);
   }
@@ -612,6 +678,7 @@ function sendQueue() {
 async function startAudio(mode, language, streams, timerId, levelId, onUnexpectedClose) {
   resetResults();
   state.streams = [].concat(streams); state.activeMode = mode; state.stopping = false;
+  markLiveTab(mode);
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) throw Error("Web Audio is not supported in this browser.");
   state.audioContext = new AC();
@@ -686,6 +753,7 @@ async function stopAudio(levelId) {
   } catch (e) { console.warn(e); }
   if (levelId) $(levelId).style.width = "0%";
   state.streams = []; state.processor = null; state.sources = []; state.mute = null; state.audioContext = null; state.activeMode = null;
+  markLiveTab(null);
 }
 
 function secureContextHelp() { return "Open this site over HTTPS (or use localhost). Browsers block microphone and screen-capture APIs on ordinary HTTP LAN addresses."; }

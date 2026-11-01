@@ -1,31 +1,21 @@
 <!doctype html>
-<html lang="en" dir="auto">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f3f1eb">
+  <meta name="theme-color" content="#2d3627">
   <title>Conversation Notes</title>
   <link rel="stylesheet" href="/web/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="/" aria-label="Conversation Notes home">
-      <span class="brand-mark" aria-hidden="true">cn</span>
-      <span class="brand-copy"><strong>Conversation Notes</strong><small>PRIVATE WORKSPACE</small></span>
-    </a>
-    <div class="topbar-right">
-      <div class="server-indicator" id="serverState"><i></i><span>Checking server</span></div>
-      <div class="account-box" id="accountBox" hidden><span class="account-avatar" id="accountAvatar"></span><span id="accountName"></span><button class="text-button" id="logoutBtn" type="button">Sign out</button></div>
-    </div>
-  </header>
-
-  <main class="page auth-page" id="authView" hidden>
+  <main class="auth-page" id="authView" hidden>
     <section class="auth-card">
-      <p class="kicker" id="authKicker">WELCOME BACK</p>
+      <span class="brand-mark auth-mark" aria-hidden="true">cn</span>
+      <p class="auth-kicker" id="authKicker">Welcome back</p>
       <h1 id="authTitle">Sign in to your notes</h1>
       <p class="auth-copy" id="authCopy">Your recordings, transcripts and summaries are saved to your account on this server.</p>
       <form id="authForm" novalidate>
-        <label class="field">Username<input id="authUsername" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}"></label>
+        <label class="field">Username<input id="authUsername" autocomplete="username" required minlength="3" maxlength="32"></label>
         <label class="field">Password<input id="authPassword" type="password" autocomplete="current-password" required minlength="8"></label>
         <p class="auth-error" id="authError" role="alert" hidden></p>
         <button class="button button-dark auth-submit" id="authSubmit" type="submit">Sign in</button>
@@ -34,115 +24,120 @@
     </section>
   </main>
 
-  <main class="page" id="appView" hidden>
-    <section class="welcome">
-      <div>
-        <p class="kicker">A clearer record of what was said</p>
-        <h1>Keep the important<br><em>parts of the conversation.</em></h1>
-        <p class="welcome-copy">Bring in a recording or capture a live conversation. Your summary stays front and centre; the full transcript is there when you need to check a detail.</p>
-      </div>
-      <div class="welcome-note"><span class="note-rule"></span><span>Made for thoughtful<br>follow-up, not more noise.</span></div>
-    </section>
-
-    <section class="workspace" aria-label="Audio input">
-      <div class="source-heading">
-        <div><p class="kicker">START WITH AUDIO</p><h2>Choose your source</h2></div>
-        <span class="private-label"><span></span> Stays on your network</span>
-      </div>
-
-      <nav class="source-tabs" aria-label="Audio source">
-        <button class="source-tab active" data-tab="upload"><span class="tab-number">01</span><span><b>Upload</b><small>Existing recording</small></span></button>
-        <button class="source-tab" data-tab="mic"><span class="tab-number">02</span><span><b>Microphone</b><small>Record in this page</small></span></button>
-        <button class="source-tab" data-tab="meeting"><span class="tab-number">03</span><span><b>Meeting tab</b><small>Share Meet / Discord audio</small></span></button>
-      </nav>
-
-      <section class="source-panel active" id="panel-upload">
-        <div class="panel-copy"><h3>Bring in a recording</h3><p>Choose an audio file. We’ll transcribe it and prepare a structured set of notes.</p></div>
-        <label class="file-drop" id="dropzone" for="audioFile">
-          <span class="upload-symbol" aria-hidden="true">↑</span>
-          <span class="drop-main"><b id="dropTitle">Drop a recording here, or browse</b><small>MP3, WAV, M4A, WebM and other browser-supported audio</small></span>
-          <input id="audioFile" type="file" accept="audio/*,.m4a,.mp3,.wav,.webm">
-        </label>
-        <div class="selected-file" id="fileRow" hidden><span class="file-symbol">♫</span><span class="file-details"><b id="fileName"></b><small id="fileSize"></small></span><button class="text-button" id="clearFile" type="button">Remove</button></div>
-        <div class="source-controls">
-          <label class="field">Language
-            <select id="uploadLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
-          </label>
-          <button class="button button-dark" id="uploadBtn" disabled>Prepare notes <span>→</span></button>
+  <div class="shell" id="appView" hidden>
+    <aside class="sidebar" id="sidebar" aria-label="Your notes">
+      <a class="brand" href="/" aria-label="Conversation Notes home">
+        <span class="brand-mark" aria-hidden="true">cn</span>
+        <span class="brand-name">Conversation Notes</span>
+      </a>
+      <button class="new-note" id="newNote" type="button"><span aria-hidden="true">+</span> New note</button>
+      <input class="note-search" id="noteSearch" type="search" placeholder="Search notes" aria-label="Search notes">
+      <nav class="library-list" id="libraryList"></nav>
+      <div class="sidebar-foot">
+        <button class="side-link" id="importMd" type="button">Import a .md file</button>
+        <input type="file" id="importFile" accept=".md,.markdown,.txt,text/markdown" hidden>
+        <div class="account-box" id="accountBox" hidden>
+          <span class="account-avatar" id="accountAvatar"></span>
+          <span class="account-text"><b id="accountName"></b><span class="server-indicator" id="serverState"><i></i><span>Checking server</span></span></span>
+          <button class="side-link" id="logoutBtn" type="button">Sign out</button>
         </div>
-        <div class="progress-area" id="uploadProgress" hidden><div class="progress-track"><i></i></div><span id="uploadStatus">Processing recording…</span></div>
+      </div>
+    </aside>
+    <div class="sidebar-scrim" id="sidebarScrim"></div>
+
+    <div class="main-col">
+      <header class="appbar">
+        <button class="icon-button menu-button" id="menuBtn" type="button" aria-label="Show notes" aria-controls="sidebar">
+          <span></span><span></span><span></span>
+        </button>
+        <nav class="source-tabs" aria-label="Add audio">
+          <button class="source-tab" data-tab="upload" type="button" aria-expanded="false">Upload recording</button>
+          <button class="source-tab" data-tab="mic" type="button" aria-expanded="false">Record</button>
+          <button class="source-tab" data-tab="meeting" type="button" aria-expanded="false">Capture meeting</button>
+        </nav>
+        <span id="sessionState" class="session-state" data-tone="idle" aria-live="polite">Waiting for audio</span>
+        <div class="export-menu">
+          <button class="button button-outline" id="exportBtn" type="button" aria-haspopup="menu" aria-expanded="false">Export</button>
+          <div class="export-pop" id="exportPop" role="menu" hidden>
+            <button role="menuitem" id="downloadHtml" type="button" disabled><b>Shareable page</b><small>Styled .html with the summary only</small></button>
+            <button role="menuitem" id="downloadMd" type="button" disabled><b>Markdown file</b><small>.md with summary and transcript</small></button>
+            <button role="menuitem" id="copyMd" type="button" disabled><b>Copy Markdown</b><small>To paste into another app</small></button>
+          </div>
+        </div>
+      </header>
+
+      <section class="capture-sheet" id="captureSheet" hidden aria-label="Add audio">
+        <section class="source-panel" id="panel-upload">
+          <label class="file-drop" id="dropzone" for="audioFile">
+            <span class="upload-symbol" aria-hidden="true">↑</span>
+            <span class="drop-main"><b id="dropTitle">Drop a recording here, or browse</b><small>MP3, WAV, M4A, WebM and other common audio formats</small></span>
+            <input id="audioFile" type="file" accept="audio/*,.m4a,.mp3,.wav,.webm">
+          </label>
+          <div class="selected-file" id="fileRow" hidden><span class="file-symbol">♫</span><span class="file-details"><b id="fileName"></b><small id="fileSize"></small></span><button class="text-button" id="clearFile" type="button">Remove</button></div>
+          <div class="source-controls">
+            <label class="field">Language
+              <select id="uploadLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
+            </label>
+            <button class="button button-dark" id="uploadBtn" disabled>Prepare notes</button>
+          </div>
+          <div class="progress-area" id="uploadProgress" hidden><div class="progress-track"><i></i></div><span id="uploadStatus">Processing recording…</span></div>
+        </section>
+
+        <section class="source-panel" id="panel-mic">
+          <div class="record-strip">
+            <div class="record-indicator" id="micOrb"><span></span></div>
+            <div class="record-copy"><b id="micTitle">Microphone is ready</b><small id="micHint">Keep this page open while you speak. The first text appears after about 15 seconds.</small></div>
+            <span class="level-meter" title="Input level"><i id="micLevel"></i></span>
+            <time class="record-time" id="micTimer">00:00</time>
+          </div>
+          <div class="source-controls">
+            <label class="field">Language
+              <select id="micLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
+            </label>
+            <div class="button-pair"><button class="button button-dark" id="micStart">Start recording</button><button class="button button-stop" id="micStop" disabled>Stop and prepare notes</button></div>
+          </div>
+        </section>
+
+        <section class="source-panel" id="panel-meeting">
+          <ol class="meeting-steps">
+            <li>Join the call in another browser tab.</li>
+            <li>Choose <b>Share meeting tab</b> and pick the call tab.</li>
+            <li>Turn on <b>Share tab audio</b> in the browser dialog.</li>
+          </ol>
+          <div class="record-strip">
+            <div class="record-indicator"><span></span></div>
+            <div class="record-copy"><b id="meetingTitle">No meeting audio shared</b><small id="meetingHint">Only audio from the tab you share is captured.</small></div>
+            <span class="level-meter" title="Input level"><i id="meetingLevel"></i></span>
+            <time class="record-time" id="meetingTimer">00:00</time>
+          </div>
+          <div class="source-controls">
+            <label class="field">Language
+              <select id="meetingLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
+            </label>
+            <label class="check-field"><input type="checkbox" id="meetingIncludeMic" checked> Include my microphone</label>
+            <div class="button-pair"><button class="button button-dark" id="meetingStart">Share meeting tab</button><button class="button button-stop" id="meetingStop" disabled>Stop and prepare notes</button></div>
+          </div>
+          <p class="permission-note">Needs HTTPS and a current Chrome or Edge. Let participants know when transcription is on.</p>
+        </section>
       </section>
 
-      <section class="source-panel" id="panel-mic">
-        <div class="panel-copy"><h3>Record with your microphone</h3><p>Keep this page open while you speak. You can stop whenever you’re ready.</p></div>
-        <div class="record-strip">
-          <div class="record-indicator" id="micOrb"><span></span></div>
-          <div class="record-copy"><b id="micTitle">Microphone is ready</b><small id="micHint">Microphone access requires HTTPS when you open this page from another device on the network.</small></div>
-          <span class="level-meter" title="Input level"><i id="micLevel"></i></span>
-          <time class="record-time" id="micTimer">00:00</time>
-        </div>
-        <div class="source-controls">
-          <label class="field">Language
-            <select id="micLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
-          </label>
-          <div class="button-pair"><button class="button button-dark" id="micStart">Start recording</button><button class="button button-stop" id="micStop" disabled>Stop & prepare notes</button></div>
-        </div>
-      </section>
+      <main class="note-view" id="noteView">
+        <article class="summary-paper">
+          <header class="note-head">
+            <h1 id="noteTitle" dir="auto">New note</h1>
+            <div class="note-head-meta"><span class="summary-updated" id="summaryUpdated">No summary yet</span><button class="text-button" id="renameNote" type="button" hidden>Rename</button></div>
+          </header>
+          <div class="summary-content empty-summary" id="summary" dir="auto"></div>
+        </article>
 
-      <section class="source-panel" id="panel-meeting">
-        <div class="panel-copy"><h3>Capture audio from a meeting</h3><p>This page does not join a meeting for you. Open Google Meet or Discord in another browser tab, join there, then share that tab’s audio here.</p></div>
-        <div class="meeting-steps">
-          <div><span>1</span><p>Join the call in a separate browser tab.</p></div>
-          <div><span>2</span><p>Choose <b>Meeting tab</b> below and select the call tab.</p></div>
-          <div><span>3</span><p>In the browser sharing dialog, turn on <b>Share tab audio</b>.</p></div>
-        </div>
-        <div class="record-strip">
-          <div class="meeting-symbol">↗</div>
-          <div class="record-copy"><b id="meetingTitle">No meeting audio shared</b><small id="meetingHint">Only audio from the tab you explicitly share is captured.</small></div>
-          <span class="level-meter" title="Input level"><i id="meetingLevel"></i></span>
-          <time class="record-time" id="meetingTimer">00:00</time>
-        </div>
-        <div class="source-controls">
-          <label class="field">Language
-            <select id="meetingLanguage"><option value="ar" selected>Arabic (Iraqi / Arabic)</option><option value="en">English</option><option value="auto">Auto detect</option></select>
-          </label>
-          <label class="check-field"><input type="checkbox" id="meetingIncludeMic" checked> Include my microphone</label>
-          <div class="button-pair"><button class="button button-dark" id="meetingStart">Choose meeting tab</button><button class="button button-stop" id="meetingStop" disabled>Stop & prepare notes</button></div>
-        </div>
-        <p class="permission-note">Open this page over trusted HTTPS (plain HTTP on a LAN IP blocks capture). Use current Chrome or Edge, choose the Google Meet browser tab, and enable “Share tab audio”. This page captures audio only; it does not join the meeting. Let participants know when recording or transcription is active.</p>
-      </section>
-    </section>
-
-    <section class="notes-section">
-      <div class="notes-heading">
-        <div><p class="kicker">YOUR SESSION</p><h2 id="noteTitle">Conversation notes</h2><button class="text-button rename-button" id="renameNote" type="button" hidden>Rename</button></div>
-        <div class="notes-tools"><span id="sessionState" class="session-state" data-tone="idle" aria-live="polite">Waiting for audio</span><button class="button button-outline" id="copyMd" disabled>Copy Markdown</button><button class="button button-outline" id="downloadMd" disabled>Download .md ↓</button><button class="button button-dark" id="downloadHtml" disabled>Download HTML ↓</button></div>
-      </div>
-
-      <article class="summary-paper">
-        <div class="paper-topline"><span class="paper-label">SUMMARY</span><span class="summary-updated" id="summaryUpdated">No summary yet</span></div>
-        <div class="summary-content empty-summary" id="summary" dir="auto">
-          <div class="empty-mark">✳</div>
-          <h3>Your notes will take shape here.</h3>
-          <p>Once audio is processed, the key points, decisions and next steps will appear in this space.</p>
-        </div>
-      </article>
-
-      <details class="transcript-details">
-        <summary><span><b>Full transcript</b><small id="transcriptCount">0 words · Expand to review the recognized speech</small></span><span class="details-arrow">＋</span></summary>
-        <div class="transcript-content" id="transcript" dir="auto">The recognized speech will appear here.</div>
-      </details>
-      <p class="review-note">Please review names, dates, numbers and action items against the original audio. Automated transcription and summaries can contain mistakes.</p>
-    </section>
-    <section class="library-section">
-      <div class="notes-heading">
-        <div><p class="kicker">SAVED TO YOUR ACCOUNT</p><h2>Your notes</h2></div>
-        <div class="notes-tools"><span class="session-state" id="libraryCount" data-tone="idle">Loading…</span><button class="button button-outline" id="importMd" type="button">Import .md</button><input type="file" id="importFile" accept=".md,.markdown,.txt,text/markdown" hidden></div>
-      </div>
-      <div class="library-list" id="libraryList"></div>
-    </section>
-    <footer><span>Conversation Notes</span><span>Private network workspace · Audio is processed by your server</span></footer>
-  </main>
+        <details class="transcript-details">
+          <summary><span><b>Full transcript</b><small id="transcriptCount">0 words</small></span><span class="details-arrow" aria-hidden="true">+</span></summary>
+          <div class="transcript-content" id="transcript" dir="auto">The recognized speech will appear here.</div>
+        </details>
+        <p class="review-note">Check names, dates, numbers and tasks against the original audio. Automatic transcripts and summaries can contain mistakes.</p>
+      </main>
+    </div>
+  </div>
   <script src="/web/app.js"></script>
 </body>
 </html>
