@@ -1,6 +1,13 @@
-
 fastapi
 uvicorn[standard]
 faster-whisper
 python-multipart
 onnxruntime
+numpy
+# Summary model (Qwen). On a CPU-only server, install torch from the CPU index
+# first to avoid the much larger CUDA build:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch
+transformers
+# Needed by from_pretrained(low_cpu_mem_usage=True)
+accelerate
