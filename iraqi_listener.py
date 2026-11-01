@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from live_router import build_live_router
 import accounts
+import security
 
 
 # ============================================================
@@ -118,7 +119,16 @@ app = FastAPI(
     ),
     version="2.0.0",
     lifespan=lifespan,
+    # The interactive API docs describe every endpoint to anyone; off unless asked for.
+    docs_url="/docs" if os.getenv("ENABLE_API_DOCS") == "1" else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if os.getenv("ENABLE_API_DOCS") == "1" else None,
 )
+security.install(app)
+
+# Uploads waiting or running per user; more are refused so one account
+# cannot fill the server's queue.
+MAX_PENDING_UPLOADS_PER_USER = 3
 
 
 # ============================================================
@@ -476,9 +486,18 @@ def transcribe_audio(
                 detail="The uploaded audio file is empty.",
             )
 
+        if accounts.count_notes(user["id"], status="processing") >= MAX_PENDING_UPLOADS_PER_USER:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"You already have {MAX_PENDING_UPLOADS_PER_USER} recordings processing. "
+                    "Wait for one to finish, then upload again."
+                ),
+            )
+
         note_id = accounts.create_note(
             user["id"],
-            title=Path(filename).stem,
+            title=Path(filename).stem[:200],
             source="upload",
             language=language,
             status="processing",
@@ -505,7 +524,7 @@ def transcribe_audio(
         print(f"Upload failed: {type(exc).__name__}: {exc}")
         raise HTTPException(
             status_code=500,
-            detail=f"Upload failed: {type(exc).__name__}: {exc}",
+            detail="Upload failed. Please try again.",
         ) from exc
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -574,8 +593,8 @@ def process_upload_job(note_id, temp_path, filename, total_bytes, language, incl
                 summary = summarize_transcript(transcript)
             except Exception as exc:
                 # Keep the transcript even if summarization fails.
-                summary_error = f"Summarization failed: {type(exc).__name__}: {exc}"
-                print(f"[note {note_id}] {summary_error}")
+                print(f"[note {note_id}] Summarization failed: {type(exc).__name__}: {exc}")
+                summary_error = "The summary could not be generated. The transcript is saved."
 
         accounts.save_note(note_id, summary=summary, status="ready", error=summary_error)
         print(f"[note {note_id}] Done ({info.duration:.0f}s of audio).")
@@ -585,7 +604,7 @@ def process_upload_job(note_id, temp_path, filename, total_bytes, language, incl
         accounts.save_note(
             note_id,
             status="failed",
-            error=f"Audio processing failed: {type(exc).__name__}: {exc}",
+            error="This recording could not be processed. Check that the file is a valid audio file and upload it again.",
         )
     finally:
         try:

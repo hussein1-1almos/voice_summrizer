@@ -708,7 +708,11 @@ async function startAudio(mode, language, streams, timerId, levelId, onUnexpecte
   };
   state.ws.onerror = () => setState("Live connection failed. Check server and network.");
   state.ws.onclose = e => {
-    if (state.activeMode && !state.stopping) { setState("Connection closed by the server"); onUnexpectedClose(); }
+    if (state.activeMode && !state.stopping) {
+      // 4429: the server refused a second live session and already said why.
+      if (e.code !== 4429) setState("Connection closed by the server");
+      onUnexpectedClose();
+    }
     if (e.code === 4401) showAuth();
   };
 

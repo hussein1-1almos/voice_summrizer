@@ -10,7 +10,8 @@ title, source, language, transcript, summary and the ticked task state.
 
 Environment:
     NOTES_DB            SQLite file path (default: notes.db next to this file)
-    ALLOW_REGISTRATION  "0" to disable creating new accounts (default: "1")
+    ALLOW_REGISTRATION  "1" to let visitors create accounts (default: off;
+                        create accounts with "python manage.py create-user")
 """
 from __future__ import annotations
 
@@ -28,12 +29,34 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from pydantic import BaseModel
 
+import security
+
 DB_PATH = os.getenv("NOTES_DB", str(Path(__file__).with_name("notes.db")))
-ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "1") != "0"
-SESSION_COOKIE = "cn_session"
+ALLOW_REGISTRATION = os.getenv("ALLOW_REGISTRATION", "0") == "1"
+SESSION_COOKIE = security.SESSION_COOKIE
 SESSION_SECONDS = 30 * 24 * 3600
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 MIN_PASSWORD_LENGTH = 8
+MAX_PASSWORD_LENGTH = 256  # hashing very long inputs is wasted CPU for an attacker to exploit
+
+# Password guessing: every sign-in attempt counts against the IP; failures
+# also count against the username, which locks it for a while.
+LOGIN_IP_LIMIT = security.RateLimiter(limit=20, window_seconds=5 * 60)
+LOGIN_USER_FAILURES = security.RateLimiter(limit=5, window_seconds=15 * 60)
+REGISTER_IP_LIMIT = security.RateLimiter(limit=5, window_seconds=60 * 60)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _too_many(seconds: int):
+    minutes = max(1, round(seconds / 60))
+    raise HTTPException(
+        status_code=429,
+        detail=f"Too many attempts. Try again in {minutes} minute{'s' if minutes != 1 else ''}.",
+        headers={"Retry-After": str(seconds)},
+    )
 
 
 # ============================================================
@@ -161,6 +184,11 @@ def require_user(request: Request) -> dict:
 
 
 def websocket_user(websocket: WebSocket) -> dict | None:
+    # Browsers send cookies on cross-site WebSocket handshakes and CORS does not
+    # apply, so the Origin must be checked here (cross-site WebSocket hijacking).
+    if not security.origin_allowed(websocket.headers.get("origin"), websocket.headers.get("host")):
+        print(f"Blocked WebSocket from origin {websocket.headers.get('origin')!r}")
+        return None
     return user_for_token(websocket.cookies.get(SESSION_COOKIE))
 
 
@@ -171,6 +199,7 @@ def _set_session_cookie(response: Response, request: Request, token: str):
         httponly=True,
         samesite="lax",
         secure=request.url.scheme == "https",
+        path="/",
     )
 
 
@@ -225,6 +254,13 @@ def save_note(note_id: int, transcript: str | None = None, summary: str | None =
         conn.execute(f"UPDATE notes SET {', '.join(fields)} WHERE id = ?", (*values, note_id))
 
 
+def count_notes(user_id: int, status: str) -> int:
+    with db() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM notes WHERE user_id = ? AND status = ?", (user_id, status)
+        ).fetchone()[0]
+
+
 def _note_out(row: sqlite3.Row, full: bool) -> dict:
     note = {
         "id": row["id"],
@@ -276,9 +312,15 @@ def validate_credentials(username: str, password: str) -> str:
     username = username.strip()
     if not USERNAME_RE.match(username):
         raise ValueError("Username must be 3-32 characters: letters, numbers, _ . -")
+    _check_password_length(password)
+    return username
+
+
+def _check_password_length(password: str):
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
-    return username
+    if len(password) > MAX_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at most {MAX_PASSWORD_LENGTH} characters.")
 
 
 def create_user(username: str, password: str) -> int:
@@ -302,8 +344,7 @@ def find_user(username: str) -> dict | None:
 
 def set_password(user_id: int, password: str):
     """Change a password and sign the user out everywhere."""
-    if len(password) < MIN_PASSWORD_LENGTH:
-        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    _check_password_length(password)
     with db() as conn:
         conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
         conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
@@ -349,6 +390,10 @@ def build_accounts_router() -> APIRouter:
     def register(body: Credentials, request: Request, response: Response):
         if not ALLOW_REGISTRATION:
             raise HTTPException(status_code=403, detail="Creating new accounts is disabled on this server.")
+        ip = _client_ip(request)
+        if wait := REGISTER_IP_LIMIT.retry_after(ip):
+            _too_many(wait)
+        REGISTER_IP_LIMIT.hit(ip)
         username = body.username.strip()
         try:
             user_id = create_user(username, body.password)
@@ -361,14 +406,27 @@ def build_accounts_router() -> APIRouter:
 
     @router.post("/login")
     def login(body: Credentials, request: Request, response: Response):
-        with db() as conn:
-            row = conn.execute(
-                "SELECT id, username, password_hash FROM users WHERE username = ?",
-                (body.username.strip(),),
-            ).fetchone()
-        password_ok = verify_password(body.password, row["password_hash"] if row else _DUMMY_HASH)
+        ip = _client_ip(request)
+        user_key = body.username.strip().lower()[:64]
+        wait = max(LOGIN_IP_LIMIT.retry_after(ip), LOGIN_USER_FAILURES.retry_after(user_key))
+        if wait:
+            _too_many(wait)
+        LOGIN_IP_LIMIT.hit(ip)
+
+        row = None
+        password_ok = False
+        if len(body.password) <= MAX_PASSWORD_LENGTH:
+            with db() as conn:
+                row = conn.execute(
+                    "SELECT id, username, password_hash FROM users WHERE username = ?",
+                    (body.username.strip(),),
+                ).fetchone()
+            password_ok = verify_password(body.password, row["password_hash"] if row else _DUMMY_HASH)
         if row is None or not password_ok:
+            LOGIN_USER_FAILURES.hit(user_key)
+            print(f"Failed sign-in for {user_key!r} from {ip}")
             raise HTTPException(status_code=401, detail="Wrong username or password.")
+        LOGIN_USER_FAILURES.reset(user_key)
         _set_session_cookie(response, request, create_session(row["id"]))
         return {"id": row["id"], "username": row["username"]}
 

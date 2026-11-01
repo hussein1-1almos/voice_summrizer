@@ -39,6 +39,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 # the tasks from being garbage-collected before they complete.
 _background_sessions: set[asyncio.Task] = set()
 
+# Limits against one account tying up the server.
+MAX_LIVE_SESSIONS_PER_USER = 1
+MAX_BACKLOG_SECONDS = 20 * 60  # audio waiting for Whisper before capture is ended
+_live_sessions: dict = {}
+
 
 def _resample_pcm16(pcm: np.ndarray, source_rate: int, target_rate: int = 16000) -> np.ndarray:
     if pcm.size == 0:
@@ -147,7 +152,7 @@ def build_live_router(
                 print(f"[live {client}] Summary failed: {type(exc).__name__}: {exc}")
                 await send({
                     "type": "error",
-                    "message": f"Summary: {type(exc).__name__}: {exc}",
+                    "message": "The summary could not be updated. The transcript is still being saved.",
                 })
 
         def maybe_start_summary():
@@ -200,9 +205,10 @@ def build_live_router(
             try:
                 texts = await asyncio.to_thread(run_whisper)
             except Exception as exc:
+                print(f"[live {client}] Whisper failed: {type(exc).__name__}: {exc}")
                 await send({
                     "type": "error",
-                    "message": f"Whisper: {type(exc).__name__}: {exc}",
+                    "message": "Part of the audio could not be transcribed.",
                 })
                 return
 
@@ -269,6 +275,16 @@ def build_live_router(
             queued_seconds += joined.size / sample_rate
             chunks.put_nowait(joined)
 
+        user_key = user["id"] if user else client
+        if _live_sessions.get(user_key, 0) >= MAX_LIVE_SESSIONS_PER_USER:
+            await websocket.send_json({
+                "type": "error",
+                "message": "You already have a live session running. Stop it before starting another.",
+            })
+            await websocket.close(code=4429)
+            return
+        _live_sessions[user_key] = _live_sessions.get(user_key, 0) + 1
+
         try:
             first = await websocket.receive_text()
             config = json.loads(first)
@@ -289,6 +305,8 @@ def build_live_router(
                 language = "ar"
 
             source = config.get("source", "microphone")
+            if source not in ("microphone", "meeting-tab"):
+                source = "microphone"
             print(f"[live {client}] Start: source={source} language={language} sample_rate={sample_rate}")
             if user is not None and create_note is not None:
                 label = "Meeting" if source == "meeting-tab" else "Recording"
@@ -336,6 +354,16 @@ def build_live_router(
 
                     if buffered_samples >= sample_rate * chunk_seconds:
                         flush_buffer()
+                        if queued_seconds > MAX_BACKLOG_SECONDS:
+                            # Whisper cannot keep up; stop taking audio instead of
+                            # queueing without limit. What was received is still saved.
+                            print(f"[live {client}] Backlog {queued_seconds:.0f}s; ending capture")
+                            await send({
+                                "type": "error",
+                                "message": "The server is too far behind to keep transcribing live. "
+                                           "Capture stopped; the audio received so far is being saved.",
+                            })
+                            break
 
                 elif message.get("text") is not None:
                     control = json.loads(message["text"])
@@ -361,11 +389,14 @@ def build_live_router(
             try:
                 await send({
                     "type": "error",
-                    "message": f"{type(exc).__name__}: {exc}",
+                    "message": "Something went wrong with the live session. The audio received so far is being saved.",
                 })
             except Exception:
                 pass
         finally:
+            _live_sessions[user_key] -= 1
+            if not _live_sessions[user_key]:
+                del _live_sessions[user_key]
             if not stopped and note_id is not None and worker_task is not None:
                 # The page was closed (or the network dropped) mid-session: finish
                 # the queued audio and the final summary anyway, and save them.

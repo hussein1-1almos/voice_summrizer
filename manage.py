@@ -1,7 +1,6 @@
 """
 Account and data management from the command line (no web server needed).
 
-    python manage.py seed                        # test account + files in seed/
     python manage.py create-user NAME            # asks for the password
     python manage.py set-password NAME           # reset a forgotten password
     python manage.py import-md NAME FILE.md [--title "..."]
@@ -13,17 +12,11 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import os
 import sqlite3
 import sys
 from pathlib import Path
 
 import accounts
-
-SEED_DIR = Path(__file__).with_name("seed")
-SEED_USERNAME = "test"
-SEED_PASSWORD = os.getenv("SEED_PASSWORD", "test12345")
-
 
 def ask_password(confirm: bool = True) -> str:
     password = getpass.getpass("Password: ")
@@ -80,35 +73,9 @@ def cmd_list_users(args):
         print("No users yet.")
 
 
-def cmd_seed(args):
-    """Create the test account and import every seed/*.md once. Safe to re-run."""
-    user = accounts.find_user(SEED_USERNAME)
-    if user is None:
-        accounts.create_user(SEED_USERNAME, SEED_PASSWORD)
-        user = accounts.find_user(SEED_USERNAME)
-        print(f"Created user {SEED_USERNAME!r} with password {SEED_PASSWORD!r}.")
-    else:
-        print(f"User {SEED_USERNAME!r} already exists.")
-
-    for path in sorted(SEED_DIR.glob("*.md")):
-        summary, transcript = accounts.split_exported_markdown(path.read_text(encoding="utf-8-sig"))
-        with accounts.db() as conn:
-            exists = conn.execute(
-                "SELECT 1 FROM notes WHERE user_id = ? AND summary = ? AND transcript = ?",
-                (user["id"], summary, transcript),
-            ).fetchone()
-        if exists:
-            print(f"  {path.name}: already imported")
-            continue
-        note_id = accounts.import_markdown(user["id"], path.read_text(encoding="utf-8-sig"), path.stem)
-        print(f"  {path.name}: imported as note {note_id}")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-
-    sub.add_parser("seed", help="create the test account and import seed/*.md").set_defaults(func=cmd_seed)
 
     p = sub.add_parser("create-user", help="create an account")
     p.add_argument("username")
