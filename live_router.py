@@ -35,6 +35,10 @@ from typing import Callable
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+# Sessions still finishing after their page closed. Holding a reference keeps
+# the tasks from being garbage-collected before they complete.
+_background_sessions: set[asyncio.Task] = set()
+
 
 def _resample_pcm16(pcm: np.ndarray, source_rate: int, target_rate: int = 16000) -> np.ndarray:
     if pcm.size == 0:
@@ -53,14 +57,27 @@ def build_live_router(
     whisper_getter: Callable,
     summarize_fn: Callable,
     whisper_lock=None,
+    authenticate: Callable | None = None,
+    create_note: Callable | None = None,
+    save_note: Callable | None = None,
 ):
+    """
+    authenticate(websocket) -> user dict or None; when given, unauthenticated
+    connections are rejected. create_note(user_id, title, source, language) -> id
+    and save_note(note_id, transcript=..., summary=...) persist the session.
+    """
     router = APIRouter()
 
     @router.websocket("/ws/live")
     async def live_audio(websocket: WebSocket):
         await websocket.accept()
         client = f"{websocket.client.host}:{websocket.client.port}" if websocket.client else "?"
-        print(f"[live {client}] WebSocket connected")
+        user = authenticate(websocket) if authenticate else None
+        if authenticate and user is None:
+            await websocket.send_json({"type": "error", "message": "Please sign in again."})
+            await websocket.close(code=4401)
+            return
+        print(f"[live {client}] WebSocket connected" + (f" (user={user['username']})" if user else ""))
         model = whisper_getter()
         if model is None:
             await websocket.send_json({
@@ -81,6 +98,7 @@ def build_live_router(
         chunk_seconds = 15
         summary_interval_seconds = 60
         stopped = False
+        note_id = None
         received_bytes = 0
         last_level_report = 0.0
 
@@ -94,10 +112,19 @@ def build_live_router(
         summary_task: asyncio.Task | None = None
         worker_task: asyncio.Task | None = None
         send_lock = asyncio.Lock()
+        client_gone = False
 
         async def send(payload: dict):
-            async with send_lock:
-                await websocket.send_json(payload)
+            # After the page closes the session keeps running and saving;
+            # messages for the browser are simply dropped.
+            nonlocal client_gone
+            if client_gone:
+                return
+            try:
+                async with send_lock:
+                    await websocket.send_json(payload)
+            except Exception:
+                client_gone = True
 
         async def run_summary(transcript: str):
             await send({
@@ -110,6 +137,8 @@ def build_live_router(
                 summary = await asyncio.to_thread(summarize_fn, transcript)
                 print(f"[live {client}] Summary updated in {time.perf_counter() - started:.1f}s")
                 if summary:
+                    if note_id is not None:
+                        save_note(note_id, summary=summary)
                     await send({
                         "type": "summary",
                         "summary": summary,
@@ -185,6 +214,8 @@ def build_live_router(
             if text:
                 print(f"[live {client}] Whisper {elapsed:.1f}s -> {text!r}")
                 session_transcript.append(text)
+                if note_id is not None:
+                    save_note(note_id, transcript="\n".join(session_transcript))
                 await send({
                     "type": "transcript",
                     "text": text,
@@ -208,6 +239,25 @@ def build_live_router(
                     return
                 queued_seconds -= joined.size / sample_rate
                 await transcribe_chunk(joined)
+
+        async def finish_session() -> str:
+            """Transcribe whatever is still queued, then write the final summary."""
+            flush_buffer()
+            chunks.put_nowait(None)
+            try:
+                await worker_task
+            except Exception as exc:
+                print(f"[live {client}] Transcription worker failed: {type(exc).__name__}: {exc}")
+            # Read summary_task only now: the worker may have started a new one.
+            if summary_task is not None:
+                await asyncio.gather(summary_task, return_exceptions=True)
+            final_text = "\n".join(session_transcript).strip()
+            if final_text:
+                await run_summary(final_text)
+            if note_id is not None:
+                save_note(note_id, status="ready")
+            print(f"[live {client}] Session finished ({len(final_text)} characters)")
+            return final_text
 
         def flush_buffer():
             nonlocal pcm_parts, buffered_samples, queued_seconds
@@ -240,6 +290,11 @@ def build_live_router(
 
             source = config.get("source", "microphone")
             print(f"[live {client}] Start: source={source} language={language} sample_rate={sample_rate}")
+            if user is not None and create_note is not None:
+                label = "Meeting" if source == "meeting-tab" else "Recording"
+                note_id = create_note(user["id"], f"{label} · {time.strftime('%Y-%m-%d %H:%M')}", source, language,
+                                      status="live")
+                await send({"type": "session", "note_id": note_id})
             worker_task = asyncio.create_task(transcription_worker())
             await send({
                 "type": "status",
@@ -291,19 +346,11 @@ def build_live_router(
                             "type": "status",
                             "message": f"Finishing the last {remaining:.0f}s of audio...",
                         })
-                        flush_buffer()
-                        chunks.put_nowait(None)
-                        await worker_task
-                        if summary_task is not None:
-                            await summary_task
-                        final_text = "\n".join(session_transcript).strip()
-                        if final_text:
-                            await run_summary(final_text)
+                        final_text = await finish_session()
                         await send({
                             "type": "finished",
                             "transcript": final_text,
                         })
-                        print(f"[live {client}] Session finished")
                         stopped = True
                         break
 
@@ -319,10 +366,18 @@ def build_live_router(
             except Exception:
                 pass
         finally:
-            # Running to_thread calls finish in the background; their results are dropped.
-            for task in (worker_task, summary_task):
-                if task is not None and not task.done():
-                    task.cancel()
+            if not stopped and note_id is not None and worker_task is not None:
+                # The page was closed (or the network dropped) mid-session: finish
+                # the queued audio and the final summary anyway, and save them.
+                client_gone = True
+                print(f"[live {client}] Page closed mid-session; finishing note {note_id} in the background")
+                task = asyncio.create_task(finish_session())
+                _background_sessions.add(task)
+                task.add_done_callback(_background_sessions.discard)
+            else:
+                for task in (worker_task, summary_task):
+                    if task is not None and not task.done():
+                        task.cancel()
             if not stopped:
                 try:
                     await websocket.close()

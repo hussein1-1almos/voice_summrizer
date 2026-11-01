@@ -1,10 +1,9 @@
 const $ = id => document.getElementById(id);
-const CHECKS_KEY = "cn.taskChecks";
 const state = {
   file: null, ws: null, streams: [], displayStream: null, audioContext: null, processor: null, sources: [], mute: null,
   timer: null, startedAt: 0, transcript: "", summary: "", blocks: [], sampleRate: 48000, pcmQueue: [], queuedSamples: 0,
   activeMode: null, stopping: false, busy: false,
-  checks: loadChecks(),
+  user: null, noteId: null, noteTitle: "", notes: [], checks: {}, checksTimer: null, watchNoteId: null, notesPoll: null,
 };
 const WS_BASE = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
 
@@ -58,8 +57,15 @@ function plainText(s) { return String(s).replace(/[*`_]/g, "").replace(/\s+/g, "
 function isActionHeading(s) { return /(next steps?|action items?|to[- ]?do|follow[- ]?ups?|tasks?|الخطوات القادمة|الخطوات التالية|الإجراءات|المهام|المطلوب|التوصيات العملية)/i.test(s || ""); }
 function clockTime() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 
-function loadChecks() { try { return JSON.parse(localStorage.getItem(CHECKS_KEY)) || {}; } catch { return {}; } }
-function saveChecks() { try { localStorage.setItem(CHECKS_KEY, JSON.stringify(state.checks)); } catch {} }
+// Ticked tasks belong to the open note and are saved to the account (debounced).
+function saveChecks() {
+  if (!state.noteId) return;
+  const noteId = state.noteId, checks = { ...state.checks };
+  clearTimeout(state.checksTimer);
+  state.checksTimer = setTimeout(() => {
+    api(`/api/notes/${noteId}`, { method: "PATCH", json: { checks } }).catch(e => console.warn("Could not save ticks:", e));
+  }, 600);
+}
 
 // ---------------------------------------------------------------- markdown
 
@@ -209,6 +215,7 @@ $("summary").addEventListener("change", e => {
 function refreshExportButtons() {
   const empty = !state.transcript.trim() && !state.summary.trim();
   $("downloadMd").disabled = empty;
+  $("downloadHtml").disabled = empty;
   $("copyMd").disabled = empty;
 }
 function updateTranscript(t) {
@@ -222,25 +229,90 @@ function updateTranscript(t) {
   refreshExportButtons();
 }
 function updateSummary(t) { state.summary = t || ""; renderSummary(state.summary); refreshExportButtons(); }
-function resetResults() { updateTranscript(""); updateSummary(""); $("summaryUpdated").textContent = "Waiting for audio"; setState("Preparing audio"); }
+function resetResults() {
+  state.noteId = null; state.checks = {};
+  setNoteTitle("");
+  updateTranscript(""); updateSummary("");
+  $("summaryUpdated").textContent = "Waiting for audio";
+  setState("Preparing audio");
+  renderLibrary();
+}
 
 function notesMarkdown() {
   const hasTitle = state.blocks[0] && state.blocks[0].type === "h" && state.blocks[0].level === 1;
   const parts = [];
-  if (!hasTitle) parts.push("# Conversation notes");
+  if (!hasTitle) parts.push("# " + (state.noteTitle || "Conversation notes"));
   parts.push(state.blocks.length ? blocksToMarkdown(state.blocks) : "_No summary available._");
   parts.push("---", "## Full transcript", state.transcript.trim() || "_No transcript available._");
   parts.push(`---\n_Exported ${new Date().toLocaleString()} · Review names, dates and numbers against the original audio._`);
   return parts.join("\n\n") + "\n";
 }
-$("downloadMd").onclick = () => {
-  const url = URL.createObjectURL(new Blob([notesMarkdown()], { type: "text/markdown;charset=utf-8" }));
+function downloadFile(content, type, extension) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement("a");
   a.href = url;
-  a.download = `conversation-notes-${new Date().toISOString().slice(0, 10)}.md`;
+  const name = (state.noteTitle || "conversation-notes").replace(/[\\/:*?"<>|\s]+/g, "-").slice(0, 80);
+  a.download = `${name}-${new Date().toISOString().slice(0, 10)}.${extension}`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
+}
+$("downloadMd").onclick = () => downloadFile(notesMarkdown(), "text/markdown;charset=utf-8", "md");
+$("downloadHtml").onclick = () => downloadFile(notesHtml(), "text/html;charset=utf-8", "html");
+
+// A self-contained page (styles inline, no scripts) that anyone can open in a browser.
+const SHARE_CSS = `
+:root{--ink:#252923;--muted:#777a70;--line:#dfded5;--olive:#59664a;--olive-pale:#edf0e8;--paper:#f3f1eb}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.9 "DM Sans","Noto Sans Arabic",Tahoma,Arial,sans-serif}
+.page{max-width:860px;margin:0 auto;padding:44px 24px 40px}
+.meta{font-size:12px;color:var(--muted);margin:0 0 18px;letter-spacing:.3px}
+.paper{background:#fffefa;border:1px solid var(--line);border-radius:6px;padding:30px 34px;box-shadow:0 10px 30px rgba(38,43,32,.05)}
+h1,h2,h3,h4{font-family:"Newsreader","Noto Sans Arabic",Georgia,serif;line-height:1.3;color:#293126}
+.summary-title{margin:0 0 22px;padding-bottom:16px;border-bottom:1px solid var(--line)}.summary-title h1{font-size:30px;margin:0}
+.summary-section{padding:0 0 18px;margin:0 0 20px;border-bottom:1px solid #e8e6dd}.summary-section:last-child{border:0;margin:0;padding:0}
+.summary-section>h2{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:22px;margin:0 0 10px;padding-bottom:9px;border-bottom:2px solid #e7e8df}
+.task-progress{font:600 11px Arial,sans-serif;color:var(--olive);background:var(--olive-pale);border-radius:20px;padding:3px 10px}
+p{margin:10px 0 14px}ul,ol{margin:10px 0 16px;padding-inline-start:28px}li{margin:7px 0}li::marker{color:var(--olive)}
+strong{font-weight:800}code{font-family:Consolas,monospace;background:#efefe7;padding:1px 5px;border-radius:3px}
+blockquote{margin:12px 0;padding:9px 15px;border-inline-start:3px solid #9aa58d;background:#f7f7f1;color:#60665a}hr{border:0;border-top:1px solid var(--line)}
+[dir="rtl"]{direction:rtl;text-align:right;font-family:"Noto Sans Arabic",Tahoma,Arial,sans-serif;line-height:2}[dir="ltr"]{direction:ltr;text-align:left}
+.action-section{background:#f8f8f3;border:1px solid #e2e4d9!important;border-radius:7px;padding:17px 20px 19px!important}
+.task-list{list-style:none;padding:0}.task-item{margin:0;padding:8px 6px}.task-item+.task-item{border-top:1px solid #ebebe3}
+.task-item label{display:flex;align-items:flex-start;gap:11px}.task-item input{width:17px;height:17px;flex:none;margin:6px 0 0;accent-color:var(--olive)}
+.task-item input:checked+span{text-decoration:line-through;color:#888d81}
+details{margin-top:14px;background:#fffefa;border:1px solid var(--line);border-radius:6px}summary{cursor:pointer;padding:14px 18px;font:500 17px "Newsreader",Georgia,serif}
+.transcript{padding:0 18px 18px;color:#555a50;font-size:14px;white-space:pre-wrap}
+.note{font-size:12px;color:var(--muted);margin-top:16px}
+@media print{body{background:#fff}.paper{border:0;box-shadow:none;padding:0}details{border:0}details>*{display:block}}
+@media(max-width:600px){.paper{padding:20px 18px}}`;
+
+function notesHtml() {
+  const hasTitle = state.blocks[0] && state.blocks[0].type === "h" && state.blocks[0].level === 1;
+  const title = hasTitle ? state.blocks[0].text : (state.noteTitle || "Conversation notes");
+  const titleBlock = hasTitle ? "" : `<header class="summary-title"><h1${dirAttr(title)}>${inlineMd(title)}</h1></header>`;
+  const summary = state.blocks.length ? renderBlocks(state.blocks) : "<p>No summary available.</p>";
+  const rtl = hasArabic(title + state.summary.slice(0, 400));
+  const transcript = state.transcript.trim()
+    ? `<details><summary>Full transcript</summary><div class="transcript"${dirAttr(state.transcript)}>${esc(state.transcript)}</div></details>` : "";
+  return `<!doctype html>
+<html lang="${rtl ? "ar" : "en"}" dir="${rtl ? "rtl" : "ltr"}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(plainText(title))}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Noto+Sans+Arabic:wght@400;600;700&display=swap">
+<style>${SHARE_CSS}</style>
+</head>
+<body>
+<main class="page">
+<p class="meta" dir="ltr">CONVERSATION NOTES · ${esc(new Date().toLocaleDateString([], { dateStyle: "long" }))}</p>
+<article class="paper">${titleBlock}${summary}</article>
+${transcript}
+<p class="note" dir="ltr">Generated automatically from a recording. Names, dates and numbers may contain recognition errors.</p>
+</main>
+</body>
+</html>
+`;
+}
 $("copyMd").onclick = async () => {
   const text = notesMarkdown();
   try {
@@ -252,6 +324,212 @@ $("copyMd").onclick = async () => {
   const label = $("copyMd").textContent;
   $("copyMd").textContent = "Copied ✓";
   setTimeout(() => { $("copyMd").textContent = label; }, 1500);
+};
+
+// ---------------------------------------------------------------- accounts
+
+async function api(path, { json, ...opts } = {}) {
+  if (json !== undefined) { opts.body = JSON.stringify(json); opts.headers = { "Content-Type": "application/json" }; }
+  const r = await fetch(path, { cache: "no-store", ...opts });
+  const data = await r.json().catch(() => ({}));
+  // A wrong password on the sign-in form is a 401 too; that must not reset the form.
+  if (r.status === 401 && !/^\/api\/(login|register)$/.test(path)) showAuth();
+  if (!r.ok) throw Error(typeof data.detail === "string" ? data.detail : `Server returned ${r.status}`);
+  return data;
+}
+
+let authMode = "login";
+function setAuthMode(mode) {
+  authMode = mode;
+  const login = mode === "login";
+  $("authKicker").textContent = login ? "WELCOME BACK" : "NEW ACCOUNT";
+  $("authTitle").textContent = login ? "Sign in to your notes" : "Create your account";
+  $("authCopy").textContent = login
+    ? "Your recordings, transcripts and summaries are saved to your account on this server."
+    : "Choose a username (letters, numbers, _ . -) and a password of at least 8 characters.";
+  $("authSubmit").textContent = login ? "Sign in" : "Create account";
+  $("authSwitchText").textContent = login ? "New here?" : "Already have an account?";
+  $("authSwitch").textContent = login ? "Create an account" : "Sign in instead";
+  $("authPassword").autocomplete = login ? "current-password" : "new-password";
+  $("authError").hidden = true;
+}
+$("authSwitch").onclick = () => setAuthMode(authMode === "login" ? "register" : "login");
+$("authForm").onsubmit = async e => {
+  e.preventDefault();
+  $("authSubmit").disabled = true;
+  $("authError").hidden = true;
+  try {
+    const user = await api(authMode === "login" ? "/api/login" : "/api/register", {
+      method: "POST", json: { username: $("authUsername").value, password: $("authPassword").value },
+    });
+    $("authPassword").value = "";
+    showApp(user);
+  } catch (err) {
+    $("authError").textContent = err.message;
+    $("authError").hidden = false;
+  } finally {
+    $("authSubmit").disabled = false;
+  }
+};
+
+function showAuth() {
+  state.user = null;
+  $("appView").hidden = true;
+  $("accountBox").hidden = true;
+  $("authView").hidden = false;
+  $("authUsername").focus();
+}
+function showApp(user) {
+  state.user = user;
+  $("accountName").textContent = user.username;
+  $("accountAvatar").textContent = user.username.slice(0, 1).toUpperCase();
+  $("accountBox").hidden = false;
+  $("authView").hidden = true;
+  $("appView").hidden = false;
+  refreshNotes();
+}
+$("logoutBtn").onclick = async () => {
+  if (state.activeMode) {
+    if (!confirm("A live session is running. Stop it and sign out?")) return;
+    await (state.activeMode === "microphone" ? stopMic() : stopMeeting());
+  }
+  await api("/api/logout", { method: "POST" }).catch(() => {});
+  resetResults();
+  setState("Waiting for audio", "idle");
+  state.notes = [];
+  renderLibrary();
+  showAuth();
+};
+
+// ---------------------------------------------------------------- saved notes
+
+const SOURCE_LABELS = { upload: "Upload", microphone: "Microphone", "meeting-tab": "Meeting", import: "Imported" };
+const STATUS_LABELS = { processing: "Processing…", live: "Recording", failed: "Failed" };
+function formatDate(ts) { return new Date(ts * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }); }
+
+function setNoteTitle(title) {
+  state.noteTitle = title || "";
+  $("noteTitle").textContent = title || "Conversation notes";
+  $("noteTitle").dir = "auto";
+  $("renameNote").hidden = !state.noteId;
+}
+
+async function refreshNotes() {
+  if (!state.user) return;
+  try {
+    state.notes = await api("/api/notes");
+  } catch {
+    $("libraryCount").textContent = "Could not load notes";
+    return;
+  }
+  const current = state.notes.find(n => n.id === state.noteId);
+  if (current) setNoteTitle(current.title);
+  renderLibrary();
+
+  // An upload this page started has finished on the server: show the result.
+  const watched = state.notes.find(n => n.id === state.watchNoteId);
+  if (watched && watched.status !== "processing") {
+    state.watchNoteId = null;
+    $("uploadProgress").querySelector(".progress-track").hidden = true;
+    $("uploadStatus").textContent = watched.status === "failed" ? "Processing failed. Open the note for details." : "Finished. Your notes are saved.";
+    if (state.noteId === watched.id && !state.busy) openNote(watched.id, { scroll: false });
+  }
+  // Keep polling while the server is still working on something.
+  clearTimeout(state.notesPoll);
+  if (state.notes.some(n => n.status === "processing" || n.status === "live")) state.notesPoll = setTimeout(refreshNotes, 5000);
+}
+
+function renderLibrary() {
+  $("libraryCount").textContent = state.notes.length ? `${state.notes.length} saved` : "No notes yet";
+  if (!state.notes.length) {
+    $("libraryList").innerHTML = '<p class="library-empty">Upload a recording or start a live session — every result is saved here automatically.</p>';
+    return;
+  }
+  $("libraryList").innerHTML = state.notes.map(n => `
+    <article class="library-item${n.id === state.noteId ? " active" : ""}">
+      <button class="library-open" type="button" data-open="${n.id}">
+        <span class="library-meta">${esc(SOURCE_LABELS[n.source] || n.source)} · ${esc(formatDate(n.updated_at))}${STATUS_LABELS[n.status] ? ` <em class="note-status" data-status="${esc(n.status)}">${STATUS_LABELS[n.status]}</em>` : ""}</span>
+        <b${dirAttr(n.title)}>${esc(n.title)}</b>
+        ${n.preview ? `<small${dirAttr(n.preview)}>${esc(n.preview)}</small>` : ""}
+      </button>
+      <button class="text-button library-delete" type="button" data-delete="${n.id}">Delete</button>
+    </article>`).join("");
+}
+
+$("libraryList").addEventListener("click", async e => {
+  const open = e.target.closest("[data-open]");
+  const del = e.target.closest("[data-delete]");
+  if (open) openNote(Number(open.dataset.open));
+  if (!del) return;
+  const id = Number(del.dataset.delete);
+  if (state.busy && id === state.noteId) { setState("This note is still being recorded", "error"); return; }
+  const note = state.notes.find(n => n.id === id);
+  if (!confirm(`Delete "${note ? note.title : "this note"}"? This cannot be undone.`)) return;
+  try {
+    await api(`/api/notes/${id}`, { method: "DELETE" });
+    if (id === state.noteId) { resetResults(); setState("Note deleted", "idle"); }
+    refreshNotes();
+  } catch (err) {
+    setState("Delete failed: " + err.message);
+  }
+});
+
+async function openNote(id, { scroll = true } = {}) {
+  if (state.busy) { setState("Finish the current session before opening another note", "error"); return; }
+  try {
+    const note = await api(`/api/notes/${id}`);
+    state.noteId = note.id;
+    state.checks = note.checks || {};
+    setNoteTitle(note.title);
+    updateTranscript(note.transcript);
+    updateSummary(note.summary);
+    $("summaryUpdated").textContent = "Saved " + formatDate(note.updated_at);
+    if (note.status === "processing") {
+      state.watchNoteId = note.id;
+      setState("Processing on the server · you can close this page", "busy");
+      if (!note.summary) $("summary").innerHTML = '<div class="empty-mark">⏳</div><h3>Still processing on the server.</h3><p>This note fills in automatically when it is ready. Closing the page does not stop it.</p>';
+    } else if (note.status === "live") {
+      setState("This session is still recording or finishing on the server", "busy");
+    } else if (note.status === "failed") {
+      setState("Processing failed", "error");
+    } else {
+      setState("Opened saved note", "idle");
+    }
+    if (note.error) $("summary").insertAdjacentHTML("beforeend", `<p class="summary-warning">${esc(note.error)}</p>`);
+    renderLibrary();
+    if (scroll) document.querySelector(".notes-section").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    setState("Could not open note: " + e.message);
+  }
+}
+
+$("importMd").onclick = () => $("importFile").click();
+$("importFile").onchange = async () => {
+  const file = $("importFile").files[0];
+  $("importFile").value = "";
+  if (!file) return;
+  try {
+    const { id } = await api("/api/notes/import", {
+      method: "POST", json: { markdown: await file.text(), title: file.name.replace(/\.(md|markdown|txt)$/i, "") },
+    });
+    await refreshNotes();
+    openNote(id);
+  } catch (e) {
+    setState("Import failed: " + e.message);
+  }
+};
+
+$("renameNote").onclick = async () => {
+  if (!state.noteId) return;
+  const title = prompt("Rename note", state.noteTitle);
+  if (!title || !title.trim()) return;
+  try {
+    await api(`/api/notes/${state.noteId}`, { method: "PATCH", json: { title } });
+    setNoteTitle(title.trim());
+    refreshNotes();
+  } catch (e) {
+    setState("Rename failed: " + e.message);
+  }
 };
 
 // ---------------------------------------------------------------- upload
@@ -282,9 +560,9 @@ $("uploadBtn").onclick = async () => {
   setBusy(true);
   $("uploadProgress").hidden = false;
   $("uploadProgress").querySelector(".progress-track").hidden = false;
-  $("uploadStatus").textContent = "Uploading and preparing your notes… long recordings can take several minutes.";
+  $("uploadStatus").textContent = "Uploading… keep this page open until the upload finishes.";
   resetResults();
-  setState("Processing recording");
+  setState("Uploading recording", "busy");
   const fd = new FormData();
   fd.append("file", state.file);
   fd.append("language", $("uploadLanguage").value);
@@ -292,16 +570,18 @@ $("uploadBtn").onclick = async () => {
   try {
     const r = await fetch("/transcribe", { method: "POST", body: fd });
     const data = await r.json().catch(() => ({ detail: `Server returned ${r.status}` }));
+    if (r.status === 401) showAuth();
     if (!r.ok) throw Error(data.detail || JSON.stringify(data));
-    updateTranscript(data.text || data.transcript || "");
-    updateSummary(data.summary || "");
-    if (data.summary_error) $("summary").insertAdjacentHTML("beforeend", `<p class="summary-warning"><strong>Summary could not be generated:</strong> ${esc(data.summary_error)}</p>`);
-    setState("Notes ready", "idle");
-    $("uploadStatus").textContent = "Finished. Review the notes below.";
+    // The server now works on it in the background and saves it to the account.
+    state.noteId = data.note_id;
+    state.watchNoteId = data.note_id;
+    $("uploadStatus").textContent = data.message || "Processing on the server. You can close this page.";
+    setBusy(false);
+    await refreshNotes();
+    openNote(data.note_id, { scroll: false });
   } catch (e) {
-    setState("Processing failed");
+    setState("Upload failed");
     $("uploadStatus").textContent = e.message;
-  } finally {
     $("uploadProgress").querySelector(".progress-track").hidden = true;
     setBusy(false);
   }
@@ -347,19 +627,22 @@ async function startAudio(mode, language, streams, timerId, levelId, onUnexpecte
   state.ws.onmessage = e => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === "transcript") { updateTranscript(state.transcript ? state.transcript + "\n" + m.text : m.text); setState("Listening · transcript updated", "live"); }
-    else if (m.type === "summary") { updateSummary(m.summary); setState(state.stopping ? "Finishing notes" : "Listening · notes updated", state.stopping ? "busy" : "live"); }
+    if (m.type === "session") { state.noteId = m.note_id; refreshNotes(); }
+    else if (m.type === "transcript") { updateTranscript(state.transcript ? state.transcript + "\n" + m.text : m.text); setState("Listening · transcript updated", "live"); }
+    else if (m.type === "summary") { updateSummary(m.summary); refreshNotes(); setState(state.stopping ? "Finishing notes" : "Listening · notes updated", state.stopping ? "busy" : "live"); }
     else if (m.type === "status") setState(m.message);
     else if (m.type === "error") setState("Issue: " + m.message);
     else if (m.type === "finished") {
       updateTranscript(m.transcript || state.transcript);
-      setState("Session finished · notes ready", "idle");
+      setState("Session finished · notes saved", "idle");
       state.ws.close();
+      refreshNotes();
     }
   };
   state.ws.onerror = () => setState("Live connection failed. Check server and network.");
-  state.ws.onclose = () => {
+  state.ws.onclose = e => {
     if (state.activeMode && !state.stopping) { setState("Connection closed by the server"); onUnexpectedClose(); }
+    if (e.code === 4401) showAuth();
   };
 
   state.processor = state.audioContext.createScriptProcessor(4096, 1, 1);
@@ -508,3 +791,14 @@ window.addEventListener("pagehide", () => {
     if (state.displayStream) state.displayStream.getTracks().forEach(t => t.stop());
   } catch {}
 });
+
+// ---------------------------------------------------------------- start
+
+(async () => {
+  try {
+    const config = await fetch("/api/config").then(r => r.json());
+    if (!config.allow_registration) $("authSwitchRow").hidden = true;
+  } catch {}
+  setAuthMode("login");
+  try { showApp(await api("/api/me")); } catch { showAuth(); }
+})();

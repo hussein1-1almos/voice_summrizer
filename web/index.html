@@ -13,10 +13,28 @@
       <span class="brand-mark" aria-hidden="true">cn</span>
       <span class="brand-copy"><strong>Conversation Notes</strong><small>PRIVATE WORKSPACE</small></span>
     </a>
-    <div class="server-indicator" id="serverState"><i></i><span>Checking server</span></div>
+    <div class="topbar-right">
+      <div class="server-indicator" id="serverState"><i></i><span>Checking server</span></div>
+      <div class="account-box" id="accountBox" hidden><span class="account-avatar" id="accountAvatar"></span><span id="accountName"></span><button class="text-button" id="logoutBtn" type="button">Sign out</button></div>
+    </div>
   </header>
 
-  <main class="page">
+  <main class="page auth-page" id="authView" hidden>
+    <section class="auth-card">
+      <p class="kicker" id="authKicker">WELCOME BACK</p>
+      <h1 id="authTitle">Sign in to your notes</h1>
+      <p class="auth-copy" id="authCopy">Your recordings, transcripts and summaries are saved to your account on this server.</p>
+      <form id="authForm" novalidate>
+        <label class="field">Username<input id="authUsername" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]{3,32}"></label>
+        <label class="field">Password<input id="authPassword" type="password" autocomplete="current-password" required minlength="8"></label>
+        <p class="auth-error" id="authError" role="alert" hidden></p>
+        <button class="button button-dark auth-submit" id="authSubmit" type="submit">Sign in</button>
+      </form>
+      <p class="auth-switch" id="authSwitchRow"><span id="authSwitchText">New here?</span> <button class="text-button" id="authSwitch" type="button">Create an account</button></p>
+    </section>
+  </main>
+
+  <main class="page" id="appView" hidden>
     <section class="welcome">
       <div>
         <p class="kicker">A clearer record of what was said</p>
@@ -97,8 +115,8 @@
 
     <section class="notes-section">
       <div class="notes-heading">
-        <div><p class="kicker">YOUR SESSION</p><h2>Conversation notes</h2></div>
-        <div class="notes-tools"><span id="sessionState" class="session-state" data-tone="idle" aria-live="polite">Waiting for audio</span><button class="button button-outline" id="copyMd" disabled>Copy Markdown</button><button class="button button-outline" id="downloadMd" disabled>Download .md ↓</button></div>
+        <div><p class="kicker">YOUR SESSION</p><h2 id="noteTitle">Conversation notes</h2><button class="text-button rename-button" id="renameNote" type="button" hidden>Rename</button></div>
+        <div class="notes-tools"><span id="sessionState" class="session-state" data-tone="idle" aria-live="polite">Waiting for audio</span><button class="button button-outline" id="copyMd" disabled>Copy Markdown</button><button class="button button-outline" id="downloadMd" disabled>Download .md ↓</button><button class="button button-dark" id="downloadHtml" disabled>Download HTML ↓</button></div>
       </div>
 
       <article class="summary-paper">
@@ -115,6 +133,13 @@
         <div class="transcript-content" id="transcript" dir="auto">The recognized speech will appear here.</div>
       </details>
       <p class="review-note">Please review names, dates, numbers and action items against the original audio. Automated transcription and summaries can contain mistakes.</p>
+    </section>
+    <section class="library-section">
+      <div class="notes-heading">
+        <div><p class="kicker">SAVED TO YOUR ACCOUNT</p><h2>Your notes</h2></div>
+        <div class="notes-tools"><span class="session-state" id="libraryCount" data-tone="idle">Loading…</span><button class="button button-outline" id="importMd" type="button">Import .md</button><input type="file" id="importFile" accept=".md,.markdown,.txt,text/markdown" hidden></div>
+      </div>
+      <div class="library-list" id="libraryList"></div>
     </section>
     <footer><span>Conversation Notes</span><span>Private network workspace · Audio is processed by your server</span></footer>
   </main>

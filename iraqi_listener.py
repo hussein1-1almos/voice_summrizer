@@ -3,17 +3,19 @@ import os
 import re
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import torch
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from faster_whisper import WhisperModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from live_router import build_live_router
+import accounts
 
 
 # ============================================================
@@ -51,6 +53,10 @@ summary_model = None
 # Protect CPU inference if multiple requests arrive together.
 whisper_lock = threading.Lock()
 summary_lock = threading.Lock()
+
+# Uploads are processed one at a time on this worker thread, detached from the
+# HTTP request, so a closed browser tab does not cancel them.
+upload_jobs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="upload-job")
 
 
 # ============================================================
@@ -378,11 +384,15 @@ def summarize_transcript(transcript: str) -> str:
 # ============================================================
 # Transcription endpoint
 # ============================================================
+app.include_router(accounts.build_accounts_router())
 app.include_router(
     build_live_router(
         whisper_getter=lambda: whisper_model,
         summarize_fn=summarize_transcript,
         whisper_lock=whisper_lock,
+        authenticate=accounts.websocket_user,
+        create_note=accounts.create_note,
+        save_note=accounts.save_note,
     )
 )
 app.mount("/web", StaticFiles(directory="web"), name="web")
@@ -395,11 +405,12 @@ def web_home():
 def transcribe_audio(
     file: UploadFile = File(...),
     language: str = Form(default="ar"),
-    include_summary: bool = Form(default=True),
+    include_summary: str = Form(default="true"),
+    user: dict = Depends(accounts.require_user),
 ):
-    print(f"DEBUG: Running file: {__file__}")
-    print(f"DEBUG: include_summary={include_summary}")
-    print(f"DEBUG: summary_model_loaded={summary_model is not None}")
+    # Parsed by hand: a bool Form field came through as False when the
+    # client omitted it, silently skipping the summary.
+    include_summary = include_summary.strip().lower() not in ("false", "0", "no", "off")
     if whisper_model is None:
         raise HTTPException(
             status_code=503,
@@ -465,9 +476,59 @@ def transcribe_audio(
                 detail="The uploaded audio file is empty.",
             )
 
+        note_id = accounts.create_note(
+            user["id"],
+            title=Path(filename).stem,
+            source="upload",
+            language=language,
+            status="processing",
+        )
+        upload_jobs.submit(
+            process_upload_job, note_id, temp_path, filename, total_bytes, language, include_summary,
+        )
+        print(f"Queued {filename} ({total_bytes} bytes) as note {note_id}.")
+        # The job owns the temporary file from here on and deletes it when done.
+        temp_path = None
+
+        return {
+            "note_id": note_id,
+            "status": "processing",
+            "message": (
+                "Processing on the server. You can close this page; the note "
+                "is saved to your account when it finishes."
+            ),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Upload failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload failed: {type(exc).__name__}: {exc}",
+        ) from exc
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+        try:
+            file.file.close()
+        except Exception:
+            pass
+
+
+def process_upload_job(note_id, temp_path, filename, total_bytes, language, include_summary):
+    """
+    Runs on the upload_jobs worker thread, independent of the HTTP request,
+    so closing the browser does not stop it. Results go straight to the note.
+    """
+    try:
         whisper_language = None if language == "auto" else language
 
-        print(f"Transcribing {filename} ({total_bytes} bytes)...")
+        print(f"[note {note_id}] Transcribing {filename} ({total_bytes} bytes)...")
 
         with whisper_lock:
             segments, info = whisper_model.transcribe(
@@ -482,91 +543,52 @@ def transcribe_audio(
 
             # faster-whisper returns a generator; consume it while
             # still inside the lock.
-            segment_results = []
-            text_parts = []
-
-            for segment in segments:
-                segment_text = segment.text.strip()
-                if segment_text:
-                    text_parts.append(segment_text)
-
-                segment_results.append({
-                    "start": round(segment.start, 3),
-                    "end": round(segment.end, 3),
-                    "text": segment_text,
-                })
+            text_parts = [
+                segment.text.strip()
+                for segment in segments
+                if segment.text.strip()
+            ]
 
         transcript = " ".join(text_parts).strip()
 
         if not transcript:
-            return {
-                "text": "",
-                "summary": None,
-                "summary_error": None,
-                "warning": (
+            accounts.save_note(
+                note_id,
+                status="ready",
+                error=(
                     "Whisper did not detect clear speech. "
                     "This does not prove the audio contains no speech."
                 ),
-                "language": info.language,
-                "language_probability": round(
-                    info.language_probability, 4
-                ),
-                "duration_seconds": round(info.duration, 2),
-                "model": WHISPER_MODEL_SIZE,
-                "summary_model": SUMMARY_MODEL_NAME,
-                "segments": segment_results,
-            }
+            )
+            print(f"[note {note_id}] No speech detected.")
+            return
+
+        # Save the transcript first so it is visible while the summary runs.
+        accounts.save_note(note_id, transcript=transcript)
 
         summary = None
-        summary_error = None
-
+        summary_error = ""
         if include_summary:
-            print("Generating summary...")
+            print(f"[note {note_id}] Generating summary...")
             try:
                 summary = summarize_transcript(transcript)
             except Exception as exc:
-                # Return the transcript even if summarization fails.
-                summary_error = (
-                    f"Summarization failed: {type(exc).__name__}: {exc}"
-                )
-                print(summary_error)
+                # Keep the transcript even if summarization fails.
+                summary_error = f"Summarization failed: {type(exc).__name__}: {exc}"
+                print(f"[note {note_id}] {summary_error}")
 
-        return {
-            "text": transcript,
-            "summary": summary,
-            "summary_error": summary_error,
-            "warning": (
-                "The transcript and summary may contain recognition "
-                "errors. Verify important details against the original "
-                "audio. The summary cannot reliably recover speech "
-                "that Whisper missed."
-            ),
-            "language": info.language,
-            "language_probability": round(
-                info.language_probability, 4
-            ),
-            "duration_seconds": round(info.duration, 2),
-            "model": WHISPER_MODEL_SIZE,
-            "summary_model": SUMMARY_MODEL_NAME if include_summary else None,
-            "segments": segment_results,
-        }
+        accounts.save_note(note_id, summary=summary, status="ready", error=summary_error)
+        print(f"[note {note_id}] Done ({info.duration:.0f}s of audio).")
 
-    except HTTPException:
-        raise
     except Exception as exc:
-        print(f"Transcription request failed: {type(exc).__name__}: {exc}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Audio processing failed: {type(exc).__name__}: {exc}",
-        ) from exc
+        print(f"[note {note_id}] Processing failed: {type(exc).__name__}: {exc}")
+        accounts.save_note(
+            note_id,
+            status="failed",
+            error=f"Audio processing failed: {type(exc).__name__}: {exc}",
+        )
     finally:
-        if temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except OSError:
-                pass
-
         try:
-            file.file.close()
-        except Exception:
+            os.remove(temp_path)
+        except OSError:
             pass

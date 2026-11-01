@@ -84,6 +84,22 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS notes_user_updated ON notes(user_id, updated_at DESC);
         """)
+        # status: "processing" (upload job queued/running), "live" (recording),
+        # "ready", or "failed" (see error).
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(notes)")}
+        if "status" not in columns:
+            conn.execute("ALTER TABLE notes ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
+        if "error" not in columns:
+            conn.execute("ALTER TABLE notes ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+        # Jobs do not survive a restart; say so instead of showing them as running forever.
+        conn.execute(
+            "UPDATE notes SET status = 'failed', error = ? WHERE status = 'processing'",
+            ("The server restarted before this recording finished processing. Please upload it again.",),
+        )
+        conn.execute(
+            "UPDATE notes SET status = 'ready', error = ? WHERE status = 'live'",
+            ("The server restarted during this live session; the end of the session and the final summary may be missing.",),
+        )
         conn.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (time.time(),))
 
 
@@ -168,22 +184,29 @@ def _title_from_summary(summary: str) -> str | None:
 
 
 def create_note(user_id: int, title: str, source: str, language: str,
-                transcript: str = "", summary: str = "") -> int:
+                transcript: str = "", summary: str = "", status: str = "ready") -> int:
     now = time.time()
     with db() as conn:
         cursor = conn.execute(
-            """INSERT INTO notes (user_id, title, source, language, transcript, summary, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO notes (user_id, title, source, language, transcript, summary, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (user_id, _title_from_summary(summary) or title, source, language,
-             transcript, summary or "", now, now),
+             transcript, summary or "", status, now, now),
         )
         return cursor.lastrowid
 
 
-def save_note(note_id: int, transcript: str | None = None, summary: str | None = None):
-    """Update a note's transcript and/or summary. A summary "# Title" becomes
-    the note title unless the user renamed it."""
+def save_note(note_id: int, transcript: str | None = None, summary: str | None = None,
+              status: str | None = None, error: str | None = None):
+    """Update a note's transcript, summary and/or status. A summary "# Title"
+    becomes the note title unless the user renamed it."""
     fields, values = [], []
+    if status is not None:
+        fields.append("status = ?")
+        values.append(status)
+    if error is not None:
+        fields.append("error = ?")
+        values.append(error)
     if transcript is not None:
         fields.append("transcript = ?")
         values.append(transcript)
@@ -208,6 +231,8 @@ def _note_out(row: sqlite3.Row, full: bool) -> dict:
         "title": row["title"],
         "source": row["source"],
         "language": row["language"],
+        "status": row["status"],
+        "error": row["error"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -220,6 +245,68 @@ def _note_out(row: sqlite3.Row, full: bool) -> dict:
     else:
         note["preview"] = (row["transcript"] or "")[:160]
     return note
+
+
+def split_exported_markdown(markdown: str) -> tuple[str, str]:
+    """Split a file made by the page's "Download .md" into (summary, transcript).
+    A Markdown file without a "## Full transcript" section is all summary."""
+    text = markdown.replace("\r\n", "\n").lstrip("﻿").strip()
+    match = re.search(r"^##\s+(Full transcript|النص الكامل)\s*$", text, re.M | re.I)
+    if not match:
+        return text, ""
+    summary = re.sub(r"\n-{3,}\s*$", "", text[:match.start()].rstrip()).strip()
+    transcript = text[match.end():].strip()
+    # Drop the "---\n_Exported ..._" footer the page appends.
+    transcript = re.sub(r"\n-{3,}\s*\n_Exported[^\n]*_\s*$", "", transcript).strip()
+    if transcript.startswith("_No transcript available._"):
+        transcript = ""
+    if summary.startswith("_No summary available._"):
+        summary = ""
+    return summary, transcript
+
+
+def import_markdown(user_id: int, markdown: str, title: str = "Imported notes") -> int:
+    summary, transcript = split_exported_markdown(markdown)
+    language = "ar" if re.search(r"[؀-ۿ]", summary + transcript) else "en"
+    return create_note(user_id, title=title, source="import", language=language,
+                       transcript=transcript, summary=summary)
+
+
+def validate_credentials(username: str, password: str) -> str:
+    username = username.strip()
+    if not USERNAME_RE.match(username):
+        raise ValueError("Username must be 3-32 characters: letters, numbers, _ . -")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    return username
+
+
+def create_user(username: str, password: str) -> int:
+    """Raises ValueError for invalid input and sqlite3.IntegrityError if taken."""
+    username = validate_credentials(username, password)
+    with db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+            (username, hash_password(password), time.time()),
+        )
+        return cursor.lastrowid
+
+
+def find_user(username: str) -> dict | None:
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id, username FROM users WHERE username = ?", (username.strip(),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_password(user_id: int, password: str):
+    """Change a password and sign the user out everywhere."""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+    with db() as conn:
+        conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
+        conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
 
 
 def _owned_note(conn, note_id: int, user: dict) -> sqlite3.Row:
@@ -245,6 +332,11 @@ class NotePatch(BaseModel):
     checks: dict[str, bool] | None = None
 
 
+class NoteImport(BaseModel):
+    markdown: str
+    title: str = "Imported notes"
+
+
 def build_accounts_router() -> APIRouter:
     init_db()
     router = APIRouter(prefix="/api")
@@ -258,17 +350,10 @@ def build_accounts_router() -> APIRouter:
         if not ALLOW_REGISTRATION:
             raise HTTPException(status_code=403, detail="Creating new accounts is disabled on this server.")
         username = body.username.strip()
-        if not USERNAME_RE.match(username):
-            raise HTTPException(status_code=400, detail="Username must be 3-32 characters: letters, numbers, _ . -")
-        if len(body.password) < MIN_PASSWORD_LENGTH:
-            raise HTTPException(status_code=400, detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
         try:
-            with db() as conn:
-                cursor = conn.execute(
-                    "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-                    (username, hash_password(body.password), time.time()),
-                )
-                user_id = cursor.lastrowid
+            user_id = create_user(username, body.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         except sqlite3.IntegrityError:
             raise HTTPException(status_code=409, detail="That username is already taken.")
         _set_session_cookie(response, request, create_session(user_id))
@@ -308,6 +393,14 @@ def build_accounts_router() -> APIRouter:
                 (user["id"],),
             ).fetchall()
         return [_note_out(row, full=False) for row in rows]
+
+    @router.post("/notes/import")
+    def import_note(body: NoteImport, user: dict = Depends(require_user)):
+        if not body.markdown.strip():
+            raise HTTPException(status_code=400, detail="The Markdown file is empty.")
+        if len(body.markdown) > 5_000_000:
+            raise HTTPException(status_code=413, detail="The Markdown file is too large.")
+        return {"id": import_markdown(user["id"], body.markdown, body.title.strip()[:200] or "Imported notes")}
 
     @router.get("/notes/{note_id}")
     def get_note(note_id: int, user: dict = Depends(require_user)):
